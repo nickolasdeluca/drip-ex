@@ -17,6 +17,7 @@ import (
 	json "github.com/goccy/go-json"
 	"github.com/hashicorp/yamux"
 
+	"drip/internal/server/auth"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/constants"
 	"drip/internal/shared/httputil"
@@ -28,23 +29,29 @@ import (
 )
 
 type ConnectionConfig struct {
-	Conn         net.Conn
-	AuthToken    string
-	Manager      *tunnel.Manager
-	Logger       *zap.Logger
-	PortAlloc    *PortAllocator
-	Domain       string
-	TunnelDomain string
-	PublicPort   int
-	HTTPHandler  http.Handler
-	GroupManager *ConnectionGroupManager
-	HTTPListener *connQueueListener
-	RemoteIP     string
+	Conn net.Conn
+	// AuthToken is the legacy shared server token. Prefer Authenticator.
+	AuthToken string
+	// Authenticator resolves registration tokens to control-plane identities.
+	// Nil falls back to the legacy AuthToken comparison.
+	Authenticator *auth.Authenticator
+	Manager       *tunnel.Manager
+	Logger        *zap.Logger
+	PortAlloc     *PortAllocator
+	Domain        string
+	TunnelDomain  string
+	PublicPort    int
+	HTTPHandler   http.Handler
+	GroupManager  *ConnectionGroupManager
+	HTTPListener  *connQueueListener
+	RemoteIP      string
 }
 
 type Connection struct {
 	conn             net.Conn
 	authToken        string
+	authenticator    *auth.Authenticator
+	identity         *auth.Identity
 	manager          *tunnel.Manager
 	logger           *zap.Logger
 	subdomain        string
@@ -87,6 +94,7 @@ func NewConnection(cfg ConnectionConfig) *Connection {
 	c := &Connection{
 		conn:             cfg.Conn,
 		authToken:        cfg.AuthToken,
+		authenticator:    cfg.Authenticator,
 		manager:          cfg.Manager,
 		logger:           cfg.Logger,
 		portAlloc:        cfg.PortAlloc,
@@ -108,6 +116,40 @@ func NewConnection(cfg ConnectionConfig) *Connection {
 	c.lifecycleManager.SetConnection(cfg.Conn)
 
 	return c
+}
+
+// authenticate resolves the registration token to an identity. When no
+// Authenticator is configured the legacy shared-token comparison applies, which
+// keeps existing self-hosted deployments working unchanged.
+func (c *Connection) authenticate(token string) (*auth.Identity, error) {
+	if c.authenticator != nil {
+		ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+		defer cancel()
+		return c.authenticator.Authenticate(ctx, token, c.remoteIP)
+	}
+
+	if c.authToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(c.authToken)) != 1 {
+		return nil, auth.ErrInvalidCredential
+	}
+	if c.authToken != "" {
+		return &auth.Identity{Legacy: true}, nil
+	}
+	return &auth.Identity{Anonymous: true}, nil
+}
+
+// owner converts the authenticated identity into a tunnel.Owner.
+func (c *Connection) owner() tunnel.Owner {
+	if c.identity == nil || !c.identity.IsStored() {
+		return tunnel.Owner{}
+	}
+	owner := tunnel.Owner{
+		ClientID:  c.identity.Client.ID,
+		AccountID: c.identity.Client.AccountID,
+	}
+	if c.identity.Account != nil {
+		owner.MaxTunnels = c.identity.Account.MaxTunnels
+	}
+	return owner
 }
 
 func (c *Connection) Handle() error {
@@ -180,10 +222,18 @@ func (c *Connection) Handle() error {
 		return fmt.Errorf("tunnel type not allowed: %s", req.TunnelType)
 	}
 
-	if c.authToken != "" && subtle.ConstantTimeCompare([]byte(req.Token), []byte(c.authToken)) != 1 {
+	identity, err := c.authenticate(req.Token)
+	if err != nil {
+		// The client is told only that authentication failed; the specific
+		// reason stays server-side so a probe cannot enumerate credentials.
 		c.sendError("authentication_failed", "Invalid authentication token")
-		return fmt.Errorf("authentication failed")
+		c.logger.Warn("Registration authentication failed",
+			zap.String("remote_ip", c.remoteIP),
+			zap.Error(err),
+		)
+		return fmt.Errorf("authentication failed: %w", err)
 	}
+	c.identity = identity
 
 	// Use RegistrationHandler for registration logic
 	regHandler := NewRegistrationHandler(
@@ -206,6 +256,7 @@ func (c *Connection) Handle() error {
 		ProxyAuth:        req.ProxyAuth,
 		LocalPort:        req.LocalPort,
 		RemoteIP:         c.remoteIP,
+		Owner:            c.owner(),
 	}
 
 	result, err := regHandler.Register(regReq)

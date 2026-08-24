@@ -14,7 +14,7 @@ import (
 
 // tunnelManager is the subset of tunnel.Manager used during registration.
 type tunnelManager interface {
-	RegisterWithIP(conn *websocket.Conn, customSubdomain string, remoteIP string) (string, error)
+	RegisterOwned(conn *websocket.Conn, customSubdomain string, remoteIP string, owner tunnel.Owner) (string, error)
 	Get(subdomain string) (*tunnel.Connection, bool)
 	Unregister(subdomain string)
 }
@@ -61,6 +61,8 @@ type RegistrationRequest struct {
 	ProxyAuth        *protocol.ProxyAuth
 	LocalPort        int
 	RemoteIP         string
+	// Owner carries the authenticated control-plane identity, if any.
+	Owner tunnel.Owner
 }
 
 // RegistrationResult contains the result of a registration attempt.
@@ -103,7 +105,7 @@ func (rh *RegistrationHandler) Register(req *RegistrationRequest) (*Registration
 	}
 
 	// Register with tunnel manager
-	subdomain, err := rh.manager.RegisterWithIP(nil, req.CustomSubdomain, req.RemoteIP)
+	subdomain, err := rh.manager.RegisterOwned(nil, req.CustomSubdomain, req.RemoteIP, req.Owner)
 	if err != nil {
 		if port > 0 && rh.portAlloc != nil {
 			rh.portAlloc.Release(port)
@@ -164,6 +166,8 @@ func (rh *RegistrationHandler) Register(req *RegistrationRequest) (*Registration
 		zap.String("tunnel_type", string(req.TunnelType)),
 		zap.Int("local_port", req.LocalPort),
 		zap.Int("remote_port", port),
+		zap.String("client_id", req.Owner.ClientID),
+		zap.String("account_id", req.Owner.AccountID),
 	)
 
 	return &RegistrationResult{

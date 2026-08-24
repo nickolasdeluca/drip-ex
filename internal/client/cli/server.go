@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
@@ -11,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"drip/internal/server/auth"
 	"drip/internal/server/proxy"
+	"drip/internal/server/store"
 	"drip/internal/server/tcp"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/constants"
@@ -39,6 +42,8 @@ var (
 	serverTunnelTypes         string
 	serverMaxRequestBodyBytes int64
 	serverConfigFile          string
+	serverDBPath              string
+	serverRequireAuth         bool
 )
 
 var serverCmd = &cobra.Command{
@@ -77,6 +82,10 @@ func init() {
 	// Transport and tunnel type restrictions
 	serverCmd.Flags().StringVar(&serverTransports, "transports", getEnvString("DRIP_TRANSPORTS", "tcp,wss"), "Allowed transports: tcp,wss (env: DRIP_TRANSPORTS)")
 	serverCmd.Flags().StringVar(&serverTunnelTypes, "tunnel-types", getEnvString("DRIP_TUNNEL_TYPES", "http,https,tcp"), "Allowed tunnel types: http,https,tcp (env: DRIP_TUNNEL_TYPES)")
+	// Control plane
+	serverCmd.Flags().StringVar(&serverDBPath, "db", getEnvString("DRIP_DB_PATH", ""), "Path to the control plane SQLite database; enables client credentials and reservations (env: DRIP_DB_PATH)")
+	serverCmd.Flags().BoolVar(&serverRequireAuth, "require-auth", getEnvBool("DRIP_REQUIRE_AUTH", false), "Reject registrations without a recognised credential (env: DRIP_REQUIRE_AUTH)")
+
 	serverCmd.Flags().Int64Var(&serverMaxRequestBodyBytes, "max-request-body-bytes", getEnvInt64("DRIP_MAX_REQUEST_BODY_BYTES", 0), "Maximum tunneled HTTP request body size in bytes; 0 disables the limit (env: DRIP_MAX_REQUEST_BODY_BYTES)")
 }
 
@@ -216,6 +225,20 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		cfg.MaxRequestBodyBytes = serverMaxRequestBodyBytes
 	}
 
+	// DBPath
+	if cmd.Flags().Changed("db") {
+		cfg.DBPath = serverDBPath
+	} else if os.Getenv("DRIP_DB_PATH") != "" {
+		cfg.DBPath = serverDBPath
+	}
+
+	// RequireAuth
+	if cmd.Flags().Changed("require-auth") {
+		cfg.RequireAuth = serverRequireAuth
+	} else if os.Getenv("DRIP_REQUIRE_AUTH") != "" {
+		cfg.RequireAuth = serverRequireAuth
+	}
+
 	// TLSEnabled
 	if os.Getenv("DRIP_TLS_ENABLED") != "" {
 		cfg.TLSEnabled = os.Getenv("DRIP_TLS_ENABLED") == "true" || os.Getenv("DRIP_TLS_ENABLED") == "1"
@@ -304,6 +327,45 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Info("TLS disabled - running in plain TCP mode (for reverse proxy)")
 	}
 
+	// Control plane: open the database and build the authenticator before the
+	// listener, so registrations can resolve credentials from the first packet.
+	var controlStore *store.Store
+	if cfg.DBPath != "" {
+		controlStore, err = store.Open(cfg.DBPath)
+		if err != nil {
+			logger.Fatal("Failed to open control plane database", zap.Error(err))
+		}
+		defer func() {
+			if cerr := controlStore.Close(); cerr != nil {
+				logger.Error("Error closing control plane database", zap.Error(cerr))
+			}
+		}()
+
+		version, verr := controlStore.SchemaVersion(context.Background())
+		if verr != nil {
+			logger.Fatal("Failed to read control plane schema version", zap.Error(verr))
+		}
+		logger.Info("Control plane database ready",
+			zap.String("path", cfg.DBPath),
+			zap.Int("schema_version", version),
+		)
+	}
+
+	authenticator := auth.New(auth.Config{
+		Store:          controlStore,
+		LegacyToken:    cfg.AuthToken,
+		AllowAnonymous: !cfg.RequireAuth && cfg.AuthToken == "" && controlStore == nil,
+		Logger:         logger,
+	})
+
+	defer authenticator.Close()
+	authenticator.StartPurgeTask(5 * time.Minute)
+
+	if controlStore == nil && cfg.AuthToken == "" && !cfg.RequireAuth {
+		logger.Warn("Server is accepting unauthenticated tunnel registrations; " +
+			"set db_path for client credentials, or token for a shared secret")
+	}
+
 	tunnelManager := tunnel.NewManager(logger)
 
 	portAllocator, err := tcp.NewPortAllocator(cfg.TCPPortMin, cfg.TCPPortMax)
@@ -326,16 +388,17 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	httpHandler.SetAllowedTunnelTypes(cfg.AllowedTunnelTypes)
 
 	listener := tcp.NewListener(tcp.ListenerConfig{
-		Address:      listenAddr,
-		TLSConfig:    tlsConfig,
-		AuthToken:    cfg.AuthToken,
-		Manager:      tunnelManager,
-		Logger:       logger,
-		PortAlloc:    portAllocator,
-		Domain:       cfg.Domain,
-		TunnelDomain: cfg.TunnelDomain,
-		PublicPort:   cfg.PublicPort,
-		HTTPHandler:  httpHandler,
+		Address:       listenAddr,
+		TLSConfig:     tlsConfig,
+		AuthToken:     cfg.AuthToken,
+		Authenticator: authenticator,
+		Manager:       tunnelManager,
+		Logger:        logger,
+		PortAlloc:     portAllocator,
+		Domain:        cfg.Domain,
+		TunnelDomain:  cfg.TunnelDomain,
+		PublicPort:    cfg.PublicPort,
+		HTTPHandler:   httpHandler,
 	})
 	listener.SetAllowedTransports(cfg.AllowedTransports)
 	listener.SetAllowedTunnelTypes(cfg.AllowedTunnelTypes)
@@ -394,6 +457,15 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	logger.Info("Server stopped")
 	return nil
+}
+
+// getEnvBool returns the environment variable value as bool, or defaultVal if not set
+func getEnvBool(key string, defaultVal bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	return val == "true" || val == "1" || val == "yes"
 }
 
 // getEnvInt returns the environment variable value as int, or defaultVal if not set

@@ -32,6 +32,16 @@ type ServerConfig struct {
 	AuthToken    string `yaml:"token"`
 	MetricsToken string `yaml:"metrics_token"`
 
+	// Control plane
+	// DBPath enables the SQLite control plane (accounts, client credentials,
+	// tunnel reservations, admin users). Empty keeps the server stateless and
+	// falls back to the shared token in AuthToken.
+	DBPath string `yaml:"db_path,omitempty"`
+	// RequireAuth rejects registrations that carry no recognised credential.
+	// Without it a server with neither DBPath nor AuthToken accepts anyone,
+	// which is the historical single-user self-hosted default.
+	RequireAuth bool `yaml:"require_auth,omitempty"`
+
 	// Logging
 	Debug bool `yaml:"debug"`
 
@@ -101,6 +111,10 @@ func (c *ServerConfig) Validate() error {
 
 	if c.MaxRequestBodyBytes < 0 {
 		return fmt.Errorf("max_request_body_bytes must be >= 0")
+	}
+
+	if c.RequireAuth && c.DBPath == "" && c.AuthToken == "" {
+		return fmt.Errorf("require_auth needs either db_path or token to be set")
 	}
 
 	return nil

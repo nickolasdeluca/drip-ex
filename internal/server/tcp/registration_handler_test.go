@@ -16,8 +16,8 @@ type getFailManager struct {
 	inner *tunnel.Manager
 }
 
-func (m *getFailManager) RegisterWithIP(conn *websocket.Conn, customSubdomain, remoteIP string) (string, error) {
-	return m.inner.RegisterWithIP(conn, customSubdomain, remoteIP)
+func (m *getFailManager) RegisterOwned(conn *websocket.Conn, customSubdomain, remoteIP string, owner tunnel.Owner) (string, error) {
+	return m.inner.RegisterOwned(conn, customSubdomain, remoteIP, owner)
 }
 
 func (m *getFailManager) Get(subdomain string) (*tunnel.Connection, bool) {
