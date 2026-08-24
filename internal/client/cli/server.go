@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	cryptotls "crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
@@ -16,6 +17,7 @@ import (
 	"drip/internal/server/proxy"
 	"drip/internal/server/store"
 	"drip/internal/server/tcp"
+	servertls "drip/internal/server/tls"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/constants"
 	"drip/internal/shared/tuning"
@@ -44,6 +46,12 @@ var (
 	serverConfigFile          string
 	serverDBPath              string
 	serverRequireAuth         bool
+	serverTLSMode             string
+	serverACMEEmail           string
+	serverACMEDNSProvider     string
+	serverACMEDNSToken        string
+	serverACMECA              string
+	serverACMECacheDir        string
 )
 
 var serverCmd = &cobra.Command{
@@ -75,6 +83,14 @@ func init() {
 	// TLS options
 	serverCmd.Flags().StringVar(&serverTLSCert, "tls-cert", getEnvString("DRIP_TLS_CERT", ""), "Path to TLS certificate file (env: DRIP_TLS_CERT)")
 	serverCmd.Flags().StringVar(&serverTLSKey, "tls-key", getEnvString("DRIP_TLS_KEY", ""), "Path to TLS private key file (env: DRIP_TLS_KEY)")
+
+	// ACME / automatic TLS
+	serverCmd.Flags().StringVar(&serverTLSMode, "tls-mode", getEnvString("DRIP_TLS_MODE", ""), "TLS mode: none, manual or acme (env: DRIP_TLS_MODE; inferred when unset)")
+	serverCmd.Flags().StringVar(&serverACMEEmail, "acme-email", getEnvString("DRIP_ACME_EMAIL", ""), "ACME account email for expiry notices (env: DRIP_ACME_EMAIL)")
+	serverCmd.Flags().StringVar(&serverACMEDNSProvider, "acme-dns-provider", getEnvString("DRIP_ACME_DNS_PROVIDER", ""), "DNS provider for the ACME DNS-01 challenge: "+strings.Join(servertls.SupportedDNSProviders(), ", ")+" (env: DRIP_ACME_DNS_PROVIDER)")
+	serverCmd.Flags().StringVar(&serverACMEDNSToken, "acme-dns-token", getEnvString("DRIP_ACME_DNS_TOKEN", ""), "Scoped DNS provider API token (env: DRIP_ACME_DNS_TOKEN)")
+	serverCmd.Flags().StringVar(&serverACMECA, "acme-ca", getEnvString("DRIP_ACME_CA", ""), "ACME CA: production, staging, or a directory URL (env: DRIP_ACME_CA)")
+	serverCmd.Flags().StringVar(&serverACMECacheDir, "acme-cache-dir", getEnvString("DRIP_ACME_CACHE_DIR", ""), "Directory for certificates and the ACME account key (env: DRIP_ACME_CACHE_DIR)")
 
 	// Performance profiling
 	serverCmd.Flags().IntVar(&serverPprofPort, "pprof", getEnvInt("DRIP_PPROF_PORT", 0), "Enable pprof on specified port (env: DRIP_PPROF_PORT)")
@@ -239,7 +255,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		cfg.RequireAuth = serverRequireAuth
 	}
 
-	// TLSEnabled
+	// TLSEnabled is the pre-mode switch; it still selects manual mode so old
+	// configuration files and environments keep working unchanged.
 	if os.Getenv("DRIP_TLS_ENABLED") != "" {
 		cfg.TLSEnabled = os.Getenv("DRIP_TLS_ENABLED") == "true" || os.Getenv("DRIP_TLS_ENABLED") == "1"
 	} else if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
@@ -248,13 +265,28 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	if cfg.TLSEnabled {
-		if cfg.TLSCertFile == "" {
-			return fmt.Errorf("TLS certificate path is required when TLS is enabled (use --tls-cert flag, DRIP_TLS_CERT environment variable, or config file)")
-		}
-		if cfg.TLSKeyFile == "" {
-			return fmt.Errorf("TLS private key path is required when TLS is enabled (use --tls-key flag, DRIP_TLS_KEY environment variable, or config file)")
-		}
+	// TLSMode
+	if cmd.Flags().Changed("tls-mode") {
+		cfg.TLSMode = serverTLSMode
+	} else if os.Getenv("DRIP_TLS_MODE") != "" {
+		cfg.TLSMode = serverTLSMode
+	}
+
+	// ACME settings
+	if cmd.Flags().Changed("acme-email") || os.Getenv("DRIP_ACME_EMAIL") != "" {
+		cfg.ACME.Email = serverACMEEmail
+	}
+	if cmd.Flags().Changed("acme-dns-provider") || os.Getenv("DRIP_ACME_DNS_PROVIDER") != "" {
+		cfg.ACME.DNSProvider = serverACMEDNSProvider
+	}
+	if cmd.Flags().Changed("acme-dns-token") || os.Getenv("DRIP_ACME_DNS_TOKEN") != "" {
+		cfg.ACME.DNSAPIToken = serverACMEDNSToken
+	}
+	if cmd.Flags().Changed("acme-ca") || os.Getenv("DRIP_ACME_CA") != "" {
+		cfg.ACME.CA = serverACMECA
+	}
+	if cmd.Flags().Changed("acme-cache-dir") || os.Getenv("DRIP_ACME_CACHE_DIR") != "" {
+		cfg.ACME.CacheDir = serverACMECacheDir
 	}
 
 	if err := utils.InitServerLogger(cfg.Debug); err != nil {
@@ -313,18 +345,55 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Fatal("Invalid server configuration", zap.Error(err))
 	}
 
-	tlsConfig, err := cfg.LoadTLSConfig()
+	tlsMode, err := cfg.ResolveTLSMode()
 	if err != nil {
-		logger.Fatal("Failed to load TLS configuration", zap.Error(err))
+		logger.Fatal("Invalid TLS configuration", zap.Error(err))
 	}
 
-	if cfg.TLSEnabled {
-		logger.Info("TLS 1.3 configuration loaded",
+	var (
+		tlsConfig   *cryptotls.Config
+		acmeManager *servertls.ACMEManager
+	)
+
+	switch servertls.Mode(tlsMode) {
+	case servertls.ModeNone:
+		logger.Info("TLS disabled - running in plain TCP mode (for reverse proxy)")
+
+	case servertls.ModeManual:
+		tlsConfig, err = servertls.LoadManual(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			logger.Fatal("Failed to load TLS certificate", zap.Error(err))
+		}
+		logger.Info("TLS 1.3 enabled with manual certificates",
 			zap.String("cert", cfg.TLSCertFile),
 			zap.String("key", cfg.TLSKeyFile),
 		)
-	} else {
-		logger.Info("TLS disabled - running in plain TCP mode (for reverse proxy)")
+
+	case servertls.ModeACME:
+		acmeManager, err = servertls.NewACME(context.Background(), servertls.ACMEConfig{
+			Domain:             cfg.Domain,
+			TunnelDomain:       cfg.TunnelDomain,
+			Names:              cfg.ACME.Domains,
+			Email:              cfg.ACME.Email,
+			CA:                 cfg.ACME.CA,
+			CacheDir:           cfg.ACME.CacheDir,
+			PropagationTimeout: time.Duration(cfg.ACME.PropagationTimeoutSeconds) * time.Second,
+			Resolvers:          cfg.ACME.Resolvers,
+			DNS: servertls.DNSProviderConfig{
+				Name:     cfg.ACME.DNSProvider,
+				APIToken: cfg.ACME.DNSAPIToken,
+			},
+			Logger: logger,
+		})
+		if err != nil {
+			logger.Fatal("Failed to obtain ACME certificates", zap.Error(err))
+		}
+		defer acmeManager.Close()
+
+		tlsConfig = acmeManager.TLSConfig()
+		logger.Info("TLS 1.3 enabled with ACME certificates",
+			zap.Strings("names", acmeManager.Names()),
+		)
 	}
 
 	// Control plane: open the database and build the authenticator before the
@@ -431,7 +500,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}
 
 	protocol := "TCP (plain)"
-	if cfg.TLSEnabled {
+	if tlsConfig != nil {
 		protocol = "TCP over TLS 1.3"
 	}
 

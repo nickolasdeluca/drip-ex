@@ -21,7 +21,7 @@ Six phases. Keep this list current as phases land.
 1. **Control plane foundation** — SQLite store, client credentials, identity
    threaded through registration. *Done.*
 2. **Wildcard TLS via certmagic** — embed ACME DNS-01 so the server obtains
-   `*.<domain>` itself, with manual certs and reverse-proxy modes kept.
+   `*.<domain>` itself, with manual certs and reverse-proxy modes kept. *Done.*
 3. **Reservations** — pin a subdomain or TCP port to an account/client; portal
    creates the reservation, client binds it automatically at registration.
 4. **Admin API + embedded UI** — on its own port, separate from tunnel traffic.
@@ -37,7 +37,9 @@ Six phases. Keep this list current as phases land.
   Postgres actually arrives.
 - **Admin panel on a separate port**, never on the tunnel data path.
 - **certmagic, not `x/crypto/acme/autocert`** — autocert cannot do DNS-01 and so
-  cannot issue wildcards. See the trap about `internal/server/tls/autocert.go`.
+  cannot issue wildcards. The old `autocert.go` was dead code whose host policy
+  was broken anyway (`HostWhitelist` does exact matching, so the literal
+  `*.example.com` never matched a real subdomain); it is gone.
 - **Both reservation paths ship**: portal-first (create the reservation, then the
   client binds it) is primary; claiming a running ephemeral tunnel is secondary.
   Both write the same `tunnel_reservations` row.
@@ -53,7 +55,7 @@ internal/server/tunnel/    Manager: the in-memory registry of live tunnels
 internal/server/proxy/     HTTP handler; subdomain routing, /stats, /metrics
 internal/server/store/     SQLite control plane (accounts, clients, ...)
 internal/server/auth/      credentials, Argon2id passwords, Authenticator
-internal/server/tls/       autocert wrapper (currently dead code - see traps)
+internal/server/tls/       TLS modes: none, manual certs, ACME DNS-01 wildcard
 internal/shared/protocol/  5-byte framing, register/data-connect messages
 internal/shared/           pools, qos, netutil, httputil, ui, ...
 pkg/config/                server and client YAML config
@@ -116,15 +118,53 @@ Server modes, selected by config:
 Migrations live in `store/schema.go` as an ordered slice; the index is the
 version. **Never edit an applied migration — append a new one.**
 
+## TLS
+
+`tls_mode` picks one of three paths, and `ResolveTLSMode` infers it when unset so
+pre-existing config files keep working:
+
+| Mode | Certificate source | Inferred when |
+|---|---|---|
+| `none` | none; a reverse proxy terminates TLS | nothing else is configured |
+| `manual` | `tls_cert` / `tls_key` on disk | a cert pair or `tls_enabled` is set |
+| `acme` | certmagic, DNS-01 wildcard | `acme.dns_provider` is set |
+
+ACME mode issues one certificate covering the server domain, the tunnel domain
+and `*.<tunnel_domain>` — the wildcard is the whole point, since tunnel
+subdomains are unpredictable. DNS-01 is the only challenge that can issue a
+wildcard, so provider API credentials are mandatory; HTTP-01 and TLS-ALPN are
+explicitly disabled rather than left to fail on a server that may not own port
+80 or 443.
+
+Adding a DNS provider is one import plus one entry in the `dnsProviders`
+registry in `tls/dns.go`; it only has to satisfy `libdns.RecordAppender` and
+`libdns.RecordDeleter`. Cloudflare ships today. Weigh the dependency tree before
+adding heavy SDKs (Route53 pulls all of aws-sdk-go-v2).
+
+All three modes build on `baseTLSConfig()`: TLS 1.3 only, three cipher suites,
+no ALPN advertisement. ACME mode deliberately layers certmagic's
+`GetCertificate` onto that base rather than using certmagic's own `TLSConfig()`,
+which would advertise `h2` and `acme-tls/1` and silently change what the
+listener negotiates. Keep that property — there is a test asserting the two
+modes share a posture.
+
 ## Traps
 
-- **`internal/server/tls/autocert.go` is dead code and its host policy is
-  broken.** `autocert.HostWhitelist(domain, "*."+domain)` does exact string
-  matching, so the literal `*.example.com` never matches `foo.example.com`. Real
-  TLS today is manual cert files or Caddy in front. Phase 2 replaces this file.
-- **A wildcard host policy must check the subdomain against the live tunnel
-  manager.** Otherwise random hostnames drive unbounded ACME issuance and burn
-  the Let's Encrypt rate limit (50 certs/week per registered domain).
+- **Never enable certmagic's on-demand issuance.** With a wildcard covering
+  every tunnel subdomain it buys nothing, and it would let arbitrary SNI values
+  drive ACME requests straight into the Let's Encrypt rate limit (50 certs per
+  registered domain per week). `NewACME` manages a fixed name set and nothing
+  else. If on-demand is ever genuinely needed, it must first check the name
+  against the live tunnel manager.
+- **ACME issuance is synchronous at startup.** A server that cannot present a
+  certificate is useless, so bad DNS credentials must fail the boot rather than
+  surface later as handshake errors. Only first issuance pays the propagation
+  wait; after that the cert loads from `acme.cache_dir`.
+- **`acme.cache_dir` holds the ACME account key and must persist.** A deployment
+  that wipes it re-issues from scratch every time and burns rate limit. Mount it
+  as a volume; back it up.
+- **Use `ca: staging` while testing anything ACME-related.** Production rate
+  limits are per registered domain per week and a failing loop exhausts them.
 - **Authenticated clients bypass the per-IP tunnel cap and registration rate
   limit** (`tunnel.Manager.RegisterOwned`). Those limits exist to stop anonymous
   abuse; a fleet behind one NAT would otherwise lock itself out. Authenticated
