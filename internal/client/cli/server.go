@@ -15,6 +15,7 @@ import (
 
 	"drip/internal/server/auth"
 	"drip/internal/server/proxy"
+	"drip/internal/server/reservations"
 	"drip/internal/server/store"
 	"drip/internal/server/tcp"
 	servertls "drip/internal/server/tls"
@@ -46,6 +47,7 @@ var (
 	serverConfigFile          string
 	serverDBPath              string
 	serverRequireAuth         bool
+	serverReservationsOnly    bool
 	serverTLSMode             string
 	serverACMEEmail           string
 	serverACMEDNSProvider     string
@@ -100,6 +102,7 @@ func init() {
 	serverCmd.Flags().StringVar(&serverTunnelTypes, "tunnel-types", getEnvString("DRIP_TUNNEL_TYPES", "http,https,tcp"), "Allowed tunnel types: http,https,tcp (env: DRIP_TUNNEL_TYPES)")
 	// Control plane
 	serverCmd.Flags().StringVar(&serverDBPath, "db", getEnvString("DRIP_DB_PATH", ""), "Path to the control plane SQLite database; enables client credentials and reservations (env: DRIP_DB_PATH)")
+	serverCmd.Flags().BoolVar(&serverReservationsOnly, "reservations-only", getEnvBool("DRIP_RESERVATIONS_ONLY", false), "Reject registrations that do not bind a reservation (env: DRIP_RESERVATIONS_ONLY)")
 	serverCmd.Flags().BoolVar(&serverRequireAuth, "require-auth", getEnvBool("DRIP_REQUIRE_AUTH", false), "Reject registrations without a recognised credential (env: DRIP_REQUIRE_AUTH)")
 
 	serverCmd.Flags().Int64Var(&serverMaxRequestBodyBytes, "max-request-body-bytes", getEnvInt64("DRIP_MAX_REQUEST_BODY_BYTES", 0), "Maximum tunneled HTTP request body size in bytes; 0 disables the limit (env: DRIP_MAX_REQUEST_BODY_BYTES)")
@@ -253,6 +256,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		cfg.RequireAuth = serverRequireAuth
 	} else if os.Getenv("DRIP_REQUIRE_AUTH") != "" {
 		cfg.RequireAuth = serverRequireAuth
+	}
+
+	// ReservationsOnly
+	if cmd.Flags().Changed("reservations-only") {
+		cfg.ReservationsOnly = serverReservationsOnly
+	} else if os.Getenv("DRIP_RESERVATIONS_ONLY") != "" {
+		cfg.ReservationsOnly = serverReservationsOnly
 	}
 
 	// TLSEnabled is the pre-mode switch; it still selects manual mode so old
@@ -435,6 +445,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			"set db_path for client credentials, or token for a shared secret")
 	}
 
+	resolver := reservations.New(controlStore, cfg.ReservationsOnly, logger)
+	if cfg.ReservationsOnly {
+		logger.Info("Reservations-only mode: registrations must bind a reservation")
+	}
+
 	tunnelManager := tunnel.NewManager(logger)
 
 	portAllocator, err := tcp.NewPortAllocator(cfg.TCPPortMin, cfg.TCPPortMax)
@@ -461,6 +476,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		TLSConfig:     tlsConfig,
 		AuthToken:     cfg.AuthToken,
 		Authenticator: authenticator,
+		Resolver:      resolver,
 		Manager:       tunnelManager,
 		Logger:        logger,
 		PortAlloc:     portAllocator,

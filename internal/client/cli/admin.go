@@ -47,6 +47,230 @@ func init() {
 	adminClientCreateCmd.Flags().String("account", "", "Account name that owns the credential (required)")
 	adminClientCreateCmd.Flags().String("bandwidth", "", "Per-client bandwidth limit, e.g. 1M (optional)")
 	adminClientListCmd.Flags().String("account", "", "Filter by account name")
+
+	adminCmd.AddCommand(adminReservationCmd)
+	adminReservationCmd.AddCommand(
+		adminReservationCreateCmd,
+		adminReservationListCmd,
+		adminReservationBindCmd,
+		adminReservationEnableCmd,
+		adminReservationDisableCmd,
+		adminReservationDeleteCmd,
+	)
+	adminReservationCreateCmd.Flags().String("account", "", "Account that owns the reservation (required)")
+	adminReservationCreateCmd.Flags().String("client", "", "Bind to this client credential ID; unbound reservations may be claimed by any client on the account that asks for them by name")
+	adminReservationCreateCmd.Flags().String("subdomain", "", "Subdomain to reserve, for http/https tunnels")
+	adminReservationCreateCmd.Flags().Int("tcp-port", 0, "TCP port to reserve, for tcp tunnels")
+	adminReservationCreateCmd.Flags().String("bandwidth", "", "Per-tunnel bandwidth limit, e.g. 1M (optional)")
+	adminReservationListCmd.Flags().String("account", "", "Filter by account name")
+	adminReservationBindCmd.Flags().String("client", "", "Client credential ID to bind to; empty unbinds")
+}
+
+var adminReservationCmd = &cobra.Command{
+	Use:     "reservation",
+	Aliases: []string{"reservations"},
+	Short:   "Manage tunnel reservations",
+}
+
+var adminReservationCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Reserve a subdomain or a TCP port",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		accountName, _ := cmd.Flags().GetString("account")
+		if strings.TrimSpace(accountName) == "" {
+			return fmt.Errorf("--account is required")
+		}
+		subdomainFlag, _ := cmd.Flags().GetString("subdomain")
+		tcpPort, _ := cmd.Flags().GetInt("tcp-port")
+		clientID, _ := cmd.Flags().GetString("client")
+		bandwidth, _ := cmd.Flags().GetString("bandwidth")
+
+		if (subdomainFlag == "") == (tcpPort == 0) {
+			return fmt.Errorf("pass exactly one of --subdomain or --tcp-port")
+		}
+
+		return withStore(func(ctx context.Context, s *store.Store) error {
+			acct, err := s.GetAccountByName(ctx, accountName)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					return fmt.Errorf("account %q not found", accountName)
+				}
+				return err
+			}
+
+			reservation := &store.Reservation{
+				AccountID: acct.ID,
+				Subdomain: subdomainFlag,
+				TCPPort:   tcpPort,
+				Bandwidth: bandwidth,
+				Enabled:   true,
+			}
+			if subdomainFlag != "" {
+				reservation.TunnelType = store.TunnelTypeHTTP
+			} else {
+				reservation.TunnelType = store.TunnelTypeTCP
+			}
+
+			if clientID != "" {
+				client, cerr := s.GetClient(ctx, clientID)
+				if cerr != nil {
+					if errors.Is(cerr, store.ErrNotFound) {
+						return fmt.Errorf("client %q not found", clientID)
+					}
+					return cerr
+				}
+				if client.AccountID != acct.ID {
+					return fmt.Errorf("client %s belongs to a different account", clientID)
+				}
+				reservation.ClientID = &clientID
+			}
+
+			if err := s.CreateReservation(ctx, reservation); err != nil {
+				return err
+			}
+
+			fmt.Printf("Reservation created\n  id:       %s\n  account:  %s\n  target:   %s\n  client:   %s\n",
+				reservation.ID, acct.Name, reservation.Target(), formatClientBinding(reservation.ClientID))
+			return nil
+		})
+	},
+}
+
+var adminReservationListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List reservations",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		accountName, _ := cmd.Flags().GetString("account")
+
+		return withStore(func(ctx context.Context, s *store.Store) error {
+			accountID := ""
+			if accountName != "" {
+				acct, err := s.GetAccountByName(ctx, accountName)
+				if err != nil {
+					if errors.Is(err, store.ErrNotFound) {
+						return fmt.Errorf("account %q not found", accountName)
+					}
+					return err
+				}
+				accountID = acct.ID
+			}
+
+			list, err := s.ListReservations(ctx, accountID)
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				fmt.Println("No reservations yet. Create one with: drip admin reservation create --account <account> --subdomain <name>")
+				return nil
+			}
+
+			table := ui.NewTable([]string{"ID", "TYPE", "TARGET", "CLIENT", "ENABLED", "BANDWIDTH"})
+			for _, r := range list {
+				bw := r.Bandwidth
+				if bw == "" {
+					bw = "-"
+				}
+				table.AddRow([]string{
+					r.ID, r.TunnelType, r.Target(),
+					formatClientBinding(r.ClientID), formatBool(r.Enabled), bw,
+				})
+			}
+			fmt.Println(table.Render())
+			return nil
+		})
+	},
+}
+
+var adminReservationBindCmd = &cobra.Command{
+	Use:   "bind <reservation-id>",
+	Short: "Bind a reservation to a client credential, or unbind it",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		clientID, _ := cmd.Flags().GetString("client")
+
+		return withStore(func(ctx context.Context, s *store.Store) error {
+			reservation, err := s.GetReservation(ctx, args[0])
+			if err != nil {
+				return err
+			}
+
+			if clientID == "" {
+				reservation.ClientID = nil
+			} else {
+				client, cerr := s.GetClient(ctx, clientID)
+				if cerr != nil {
+					if errors.Is(cerr, store.ErrNotFound) {
+						return fmt.Errorf("client %q not found", clientID)
+					}
+					return cerr
+				}
+				if client.AccountID != reservation.AccountID {
+					return fmt.Errorf("client %s belongs to a different account", clientID)
+				}
+				reservation.ClientID = &clientID
+			}
+
+			if err := s.UpdateReservation(ctx, reservation); err != nil {
+				return err
+			}
+			fmt.Printf("Reservation %s (%s) is now bound to %s\n",
+				reservation.ID, reservation.Target(), formatClientBinding(reservation.ClientID))
+			return nil
+		})
+	},
+}
+
+var adminReservationEnableCmd = &cobra.Command{
+	Use:   "enable <reservation-id>",
+	Short: "Enable a reservation",
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(_ *cobra.Command, args []string) error { return setReservationEnabled(args[0], true) },
+}
+
+var adminReservationDisableCmd = &cobra.Command{
+	Use:   "disable <reservation-id>",
+	Short: "Disable a reservation without releasing the name",
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(_ *cobra.Command, args []string) error { return setReservationEnabled(args[0], false) },
+}
+
+func setReservationEnabled(id string, enabled bool) error {
+	return withStore(func(ctx context.Context, s *store.Store) error {
+		reservation, err := s.GetReservation(ctx, id)
+		if err != nil {
+			return err
+		}
+		reservation.Enabled = enabled
+		if err := s.UpdateReservation(ctx, reservation); err != nil {
+			return err
+		}
+		fmt.Printf("Reservation %s (%s) is now %s\n", reservation.ID, reservation.Target(), formatBool(enabled))
+		return nil
+	})
+}
+
+var adminReservationDeleteCmd = &cobra.Command{
+	Use:   "delete <reservation-id>",
+	Short: "Delete a reservation, releasing the name",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		return withStore(func(ctx context.Context, s *store.Store) error {
+			if err := s.DeleteReservation(ctx, args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Reservation %s deleted\n", args[0])
+			return nil
+		})
+	},
+}
+
+func formatClientBinding(clientID *string) string {
+	if clientID == nil || *clientID == "" {
+		return "any client on the account"
+	}
+	return *clientID
 }
 
 // resolveDBPath figures out which database to operate on: the --db flag, the

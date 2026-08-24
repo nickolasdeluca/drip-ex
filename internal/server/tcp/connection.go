@@ -18,11 +18,13 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"drip/internal/server/auth"
+	"drip/internal/server/reservations"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/constants"
 	"drip/internal/shared/httputil"
 	"drip/internal/shared/protocol"
 	"drip/internal/shared/qos"
+	"drip/internal/shared/units"
 	"drip/internal/shared/utils"
 
 	"go.uber.org/zap"
@@ -35,16 +37,19 @@ type ConnectionConfig struct {
 	// Authenticator resolves registration tokens to control-plane identities.
 	// Nil falls back to the legacy AuthToken comparison.
 	Authenticator *auth.Authenticator
-	Manager       *tunnel.Manager
-	Logger        *zap.Logger
-	PortAlloc     *PortAllocator
-	Domain        string
-	TunnelDomain  string
-	PublicPort    int
-	HTTPHandler   http.Handler
-	GroupManager  *ConnectionGroupManager
-	HTTPListener  *connQueueListener
-	RemoteIP      string
+	// Resolver applies tunnel reservation policy. Nil means every registration
+	// resolves to an ephemeral tunnel.
+	Resolver     *reservations.Resolver
+	Manager      *tunnel.Manager
+	Logger       *zap.Logger
+	PortAlloc    *PortAllocator
+	Domain       string
+	TunnelDomain string
+	PublicPort   int
+	HTTPHandler  http.Handler
+	GroupManager *ConnectionGroupManager
+	HTTPListener *connQueueListener
+	RemoteIP     string
 }
 
 type Connection struct {
@@ -52,6 +57,7 @@ type Connection struct {
 	authToken        string
 	authenticator    *auth.Authenticator
 	identity         *auth.Identity
+	resolver         *reservations.Resolver
 	manager          *tunnel.Manager
 	logger           *zap.Logger
 	subdomain        string
@@ -95,6 +101,7 @@ func NewConnection(cfg ConnectionConfig) *Connection {
 		conn:             cfg.Conn,
 		authToken:        cfg.AuthToken,
 		authenticator:    cfg.Authenticator,
+		resolver:         cfg.Resolver,
 		manager:          cfg.Manager,
 		logger:           cfg.Logger,
 		portAlloc:        cfg.PortAlloc,
@@ -245,6 +252,7 @@ func (c *Connection) Handle() error {
 		c.publicPort,
 		c.logger,
 	)
+	regHandler.SetResolver(c.resolver)
 
 	regReq := &RegistrationRequest{
 		TunnelType:       req.TunnelType,
@@ -259,7 +267,7 @@ func (c *Connection) Handle() error {
 		Owner:            c.owner(),
 	}
 
-	result, err := regHandler.Register(regReq)
+	result, err := regHandler.Register(c.ctx, regReq)
 	if err != nil {
 		c.sendError("registration_failed", err.Error())
 		return fmt.Errorf("registration failed: %w", err)
@@ -296,8 +304,22 @@ func (c *Connection) Handle() error {
 		)
 	}
 
-	// Configure bandwidth limiting
+	// Configure bandwidth limiting. The effective limit is the smallest of the
+	// server default, the reservation override and whatever the client asked
+	// for, so no party can raise a limit another one set.
 	effectiveBandwidth := c.bandwidth
+	if result.Bandwidth != "" {
+		reserved, berr := units.ParseBandwidth(result.Bandwidth)
+		if berr != nil {
+			c.logger.Warn("Ignoring invalid reservation bandwidth",
+				zap.String("subdomain", c.subdomain),
+				zap.String("bandwidth", result.Bandwidth),
+				zap.Error(berr),
+			)
+		} else if reserved > 0 && (effectiveBandwidth == 0 || reserved < effectiveBandwidth) {
+			effectiveBandwidth = reserved
+		}
+	}
 	if req.Bandwidth > 0 {
 		if effectiveBandwidth == 0 || req.Bandwidth < effectiveBandwidth {
 			effectiveBandwidth = req.Bandwidth

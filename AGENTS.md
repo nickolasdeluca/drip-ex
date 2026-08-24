@@ -23,7 +23,7 @@ Six phases. Keep this list current as phases land.
 2. **Wildcard TLS via certmagic** — embed ACME DNS-01 so the server obtains
    `*.<domain>` itself, with manual certs and reverse-proxy modes kept. *Done.*
 3. **Reservations** — pin a subdomain or TCP port to an account/client; portal
-   creates the reservation, client binds it automatically at registration.
+   creates the reservation, client binds it automatically at registration. *Done.*
 4. **Admin API + embedded UI** — on its own port, separate from tunnel traffic.
 5. **Claim flow** — `active_sessions` rows, "pin this running tunnel" endpoint,
    rename-on-pin.
@@ -55,6 +55,7 @@ internal/server/tunnel/    Manager: the in-memory registry of live tunnels
 internal/server/proxy/     HTTP handler; subdomain routing, /stats, /metrics
 internal/server/store/     SQLite control plane (accounts, clients, ...)
 internal/server/auth/      credentials, Argon2id passwords, Authenticator
+internal/server/reservations/  which subdomain or port a client may bind
 internal/server/tls/       TLS modes: none, manual certs, ACME DNS-01 wildcard
 internal/shared/protocol/  5-byte framing, register/data-connect messages
 internal/shared/           pools, qos, netutil, httputil, ui, ...
@@ -118,6 +119,44 @@ Server modes, selected by config:
 Migrations live in `store/schema.go` as an ordered slice; the index is the
 version. **Never edit an applied migration — append a new one.**
 
+## Reservations
+
+`internal/server/reservations` decides what a registering client may bind.
+`RegistrationHandler.Register` calls it before allocating anything, then hands
+the resolved name to `tunnel.Manager`.
+
+Resolution order:
+
+1. **Client asked for a name.** If a reservation owns it: same account, enabled,
+   and either unbound or bound to this client, it binds. Otherwise the
+   registration is refused - never silently downgraded to a random name.
+   If nobody owns it, it becomes an ephemeral tunnel.
+2. **Client asked for nothing.** The first enabled reservation bound to this
+   client that no live tunnel already holds is bound automatically. This is the
+   Windows-service path: install the credential, connect, always land on the
+   same URL.
+3. **Neither.** A random subdomain, exactly as upstream Drip behaves.
+
+`reservations_only: true` removes step 3 and turns the deployment into a closed
+fleet where every tunnel is pre-allocated. It requires `db_path`.
+
+Two rules that are easy to get wrong:
+
+- A client whose reservations are *all* live gets `ErrReservationInUse`, not a
+  random subdomain. Handing out a random name there would look like the
+  reservation had been lost.
+- Unauthenticated and legacy-token registrations have no account, so they can
+  never take a reserved name by asking for it. `checkOwnership` treats an empty
+  `AccountID` as a mismatch; do not "simplify" that check.
+
+`http` and `https` share one reservation family (`NormalizeTunnelType`): a
+reserved subdomain is a name, and the same name serves both. `tcp` reservations
+pin a port instead, and the manager keys them by the derived `tcp-<port>`.
+
+Reservations survive client deletion: the `clients` foreign key is
+`ON DELETE SET NULL`, so the name stays with the account and only the binding
+drops. Deleting the *account* cascades the reservations away with it.
+
 ## TLS
 
 `tls_mode` picks one of three paths, and `ResolveTLSMode` infers it when unset so
@@ -172,9 +211,13 @@ modes share a posture.
 - **`validateMetricsAuth` returns true when the token is empty**
   (`proxy/handler.go`). Fail-open is intentional for `/stats` on a self-hosted
   box, but the admin API must never reuse it — write a fail-closed check.
-- **Reservations must live outside the manager's shard maps.** `shard.used` is
-  cleared on `Unregister`, so anything stored there is freed when a client
-  disconnects — the opposite of what a reservation means.
+- **Reservations live in SQLite, never in the manager's shard maps.**
+  `shard.used` is cleared on `Unregister`, so anything stored there is freed
+  when a client disconnects — the opposite of what a reservation means. The
+  manager is consulted only to ask whether a name is *currently live*.
+- **Reservation bandwidth participates in a `min()`.** The effective limit is
+  the smallest of the server default, the reservation override and the client's
+  request, so no party can raise a limit another one set. Keep it that way.
 - **`admin`, `api`, `www` and friends are reserved subdomains**
   (`shared/utils/subdomain.go`) and cannot be claimed by clients. The admin panel
   can safely live on one of them.

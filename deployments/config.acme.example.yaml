@@ -54,6 +54,10 @@ acme:
 db_path: /var/lib/drip/control.db
 require_auth: true
 
+# Closed fleet: every tunnel must be pre-allocated in the control plane.
+# Leave false to let authenticated clients also open ad-hoc tunnels.
+# reservations_only: true
+
 tcp_port_min: 20000
 tcp_port_max: 20100
 

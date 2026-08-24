@@ -1,12 +1,14 @@
 package tcp
 
 import (
+	"context"
 	"fmt"
 
 	json "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"drip/internal/server/reservations"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/protocol"
 	"drip/internal/shared/utils"
@@ -24,6 +26,7 @@ type RegistrationHandler struct {
 	manager      tunnelManager
 	portAlloc    *PortAllocator
 	groupManager *ConnectionGroupManager
+	resolver     *reservations.Resolver
 	domain       string
 	tunnelDomain string
 	publicPort   int
@@ -65,10 +68,21 @@ type RegistrationRequest struct {
 	Owner tunnel.Owner
 }
 
+// SetResolver attaches the reservation resolver. Without one every
+// registration resolves to an ephemeral tunnel, which is the behavior of a
+// server with no control plane database.
+func (rh *RegistrationHandler) SetResolver(resolver *reservations.Resolver) {
+	rh.resolver = resolver
+}
+
 // RegistrationResult contains the result of a registration attempt.
 type RegistrationResult struct {
-	Subdomain        string
-	Port             int
+	Subdomain string
+	Port      int
+	// ReservationID is set when the tunnel bound a reservation.
+	ReservationID string
+	// Bandwidth is the reservation's per-tunnel override, if it sets one.
+	Bandwidth        string
 	TunnelURL        string
 	TunnelID         string
 	SupportsDataConn bool
@@ -77,7 +91,14 @@ type RegistrationResult struct {
 }
 
 // Register handles the tunnel registration process.
-func (rh *RegistrationHandler) Register(req *RegistrationRequest) (*RegistrationResult, error) {
+func (rh *RegistrationHandler) Register(ctx context.Context, req *RegistrationRequest) (*RegistrationResult, error) {
+	// Decide what this client is entitled to before touching any resources.
+	resolution, err := rh.resolve(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	req.CustomSubdomain = resolution.Subdomain
+
 	// Allocate port for TCP tunnels
 	port := 0
 	if req.TunnelType == protocol.TunnelTypeTCP {
@@ -85,7 +106,14 @@ func (rh *RegistrationHandler) Register(req *RegistrationRequest) (*Registration
 			return nil, fmt.Errorf("port allocator not configured")
 		}
 
-		if requestedPort, ok := parseTCPSubdomainPort(req.CustomSubdomain); ok {
+		requestedPort := resolution.TCPPort
+		if requestedPort == 0 {
+			if parsed, ok := parseTCPSubdomainPort(req.CustomSubdomain); ok {
+				requestedPort = parsed
+			}
+		}
+
+		if requestedPort > 0 {
 			allocatedPort, err := rh.portAlloc.AllocateSpecific(requestedPort)
 			if err != nil {
 				return nil, fmt.Errorf("failed to allocate requested port %d: %w", requestedPort, err)
@@ -168,17 +196,52 @@ func (rh *RegistrationHandler) Register(req *RegistrationRequest) (*Registration
 		zap.Int("remote_port", port),
 		zap.String("client_id", req.Owner.ClientID),
 		zap.String("account_id", req.Owner.AccountID),
+		zap.String("reservation_id", resolution.ReservationID),
 	)
 
 	return &RegistrationResult{
 		Subdomain:        subdomain,
 		Port:             port,
+		ReservationID:    resolution.ReservationID,
+		Bandwidth:        resolution.Bandwidth,
 		TunnelURL:        tunnelURL,
 		TunnelID:         tunnelID,
 		SupportsDataConn: supportsDataConn,
 		RecommendedConns: recommendedConns,
 		TunnelConn:       tunnelConn,
 	}, nil
+}
+
+// resolve asks the reservation resolver what this registration may bind.
+func (rh *RegistrationHandler) resolve(ctx context.Context, req *RegistrationRequest) (*reservations.Resolution, error) {
+	if rh.resolver == nil {
+		return &reservations.Resolution{Subdomain: req.CustomSubdomain}, nil
+	}
+
+	requestedPort := 0
+	if req.TunnelType == protocol.TunnelTypeTCP {
+		if parsed, ok := parseTCPSubdomainPort(req.CustomSubdomain); ok {
+			requestedPort = parsed
+		}
+	}
+
+	// A reservation is only free if no live tunnel already holds its name.
+	isActive := func(subdomain string) bool {
+		_, ok := rh.manager.Get(subdomain)
+		return ok
+	}
+
+	resolution, err := rh.resolver.Resolve(ctx, reservations.Request{
+		AccountID:          req.Owner.AccountID,
+		ClientID:           req.Owner.ClientID,
+		TunnelType:         string(req.TunnelType),
+		RequestedSubdomain: req.CustomSubdomain,
+		RequestedTCPPort:   requestedPort,
+	}, isActive)
+	if err != nil {
+		return nil, err
+	}
+	return resolution, nil
 }
 
 // BuildRegistrationResponse creates a protocol registration response.

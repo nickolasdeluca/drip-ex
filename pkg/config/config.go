@@ -44,6 +44,10 @@ type ServerConfig struct {
 	// tunnel reservations, admin users). Empty keeps the server stateless and
 	// falls back to the shared token in AuthToken.
 	DBPath string `yaml:"db_path,omitempty"`
+	// ReservationsOnly rejects any registration that does not bind a
+	// reservation, turning the deployment into a closed fleet where every
+	// tunnel is pre-allocated in the admin panel.
+	ReservationsOnly bool `yaml:"reservations_only,omitempty"`
 	// RequireAuth rejects registrations that carry no recognised credential.
 	// Without it a server with neither DBPath nor AuthToken accepts anyone,
 	// which is the historical single-user self-hosted default.
@@ -193,6 +197,10 @@ func (c *ServerConfig) Validate() error {
 
 	if c.RequireAuth && c.DBPath == "" && c.AuthToken == "" {
 		return fmt.Errorf("require_auth needs either db_path or token to be set")
+	}
+
+	if c.ReservationsOnly && c.DBPath == "" {
+		return fmt.Errorf("reservations_only needs db_path to be set: reservations live in the control plane database")
 	}
 
 	return nil

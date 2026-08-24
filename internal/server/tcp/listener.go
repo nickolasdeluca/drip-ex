@@ -13,6 +13,7 @@ import (
 	"drip/internal/server/auth"
 	"drip/internal/server/metrics"
 	"drip/internal/server/proxy"
+	"drip/internal/server/reservations"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/netutil"
 	"drip/internal/shared/pool"
@@ -30,13 +31,15 @@ type ListenerConfig struct {
 	AuthToken string
 	// Authenticator resolves registration tokens to control-plane identities.
 	Authenticator *auth.Authenticator
-	Manager       *tunnel.Manager
-	Logger        *zap.Logger
-	PortAlloc     *PortAllocator
-	Domain        string
-	TunnelDomain  string
-	PublicPort    int
-	HTTPHandler   http.Handler
+	// Resolver applies tunnel reservation policy.
+	Resolver     *reservations.Resolver
+	Manager      *tunnel.Manager
+	Logger       *zap.Logger
+	PortAlloc    *PortAllocator
+	Domain       string
+	TunnelDomain string
+	PublicPort   int
+	HTTPHandler  http.Handler
 }
 
 type Listener struct {
@@ -44,6 +47,7 @@ type Listener struct {
 	tlsConfig     *tls.Config
 	authToken     string
 	authenticator *auth.Authenticator
+	resolver      *reservations.Resolver
 	manager       *tunnel.Manager
 	portAlloc     *PortAllocator
 	logger        *zap.Logger
@@ -98,6 +102,7 @@ func NewListener(cfg ListenerConfig) *Listener {
 		tlsConfig:     cfg.TLSConfig,
 		authToken:     cfg.AuthToken,
 		authenticator: cfg.Authenticator,
+		resolver:      cfg.Resolver,
 		manager:       cfg.Manager,
 		portAlloc:     cfg.PortAlloc,
 		logger:        cfg.Logger,
@@ -326,6 +331,7 @@ func (l *Listener) handleConnection(netConn net.Conn) {
 		Conn:          netConn,
 		AuthToken:     l.authToken,
 		Authenticator: l.authenticator,
+		Resolver:      l.resolver,
 		Manager:       l.manager,
 		Logger:        l.logger,
 		PortAlloc:     l.portAlloc,
@@ -480,6 +486,7 @@ func (l *Listener) HandleWSConnection(conn net.Conn, remoteAddr string) {
 		Conn:          conn,
 		AuthToken:     l.authToken,
 		Authenticator: l.authenticator,
+		Resolver:      l.resolver,
 		Manager:       l.manager,
 		Logger:        l.logger,
 		PortAlloc:     l.portAlloc,

@@ -54,7 +54,7 @@ func TestRegisterReleasesResourcesWhenTunnelLookupFails(t *testing.T) {
 		logger,
 	)
 
-	_, err = rh.Register(&RegistrationRequest{
+	_, err = rh.Register(t.Context(), &RegistrationRequest{
 		TunnelType:      protocol.TunnelTypeTCP,
 		CustomSubdomain: "tcp-30001",
 		RemoteIP:        "203.0.113.10",

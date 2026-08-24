@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"drip/internal/server/auth"
+	"drip/internal/server/reservations"
 	"drip/internal/server/store"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/protocol"
@@ -24,6 +25,12 @@ type authTestServer struct {
 }
 
 func newAuthTestServer(t *testing.T, requireAuth bool) *authTestServer {
+	t.Helper()
+	return newTestServer(t, requireAuth, false)
+}
+
+// newTestServer starts a listener backed by a real control plane database.
+func newTestServer(t *testing.T, requireAuth, reservationsOnly bool) *authTestServer {
 	t.Helper()
 
 	logger := zap.NewNop()
@@ -52,6 +59,7 @@ func newAuthTestServer(t *testing.T, requireAuth bool) *authTestServer {
 	listener := NewListener(ListenerConfig{
 		Address:       "127.0.0.1:0",
 		Authenticator: authenticator,
+		Resolver:      reservations.New(s, reservationsOnly, logger),
 		Manager:       manager,
 		Logger:        logger,
 		PortAlloc:     portAlloc,
@@ -76,7 +84,15 @@ func newAuthTestServer(t *testing.T, requireAuth bool) *authTestServer {
 func (ts *authTestServer) seedCredential(t *testing.T, maxTunnels int) string {
 	t.Helper()
 
-	acct, err := ts.store.CreateAccount(t.Context(), "acme", maxTunnels)
+	token, _, _ := ts.seedAccountCredential(t, "acme", maxTunnels)
+	return token
+}
+
+// seedAccountCredential creates a named account with one client credential.
+func (ts *authTestServer) seedAccountCredential(t *testing.T, accountName string, maxTunnels int) (string, *store.Account, *store.Client) {
+	t.Helper()
+
+	acct, err := ts.store.CreateAccount(t.Context(), accountName, maxTunnels)
 	if err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
@@ -86,17 +102,18 @@ func (ts *authTestServer) seedCredential(t *testing.T, maxTunnels int) string {
 		t.Fatalf("GenerateCredential() error = %v", err)
 	}
 
-	if err := ts.store.CreateClient(t.Context(), &store.Client{
+	client := &store.Client{
 		ID:         cred.ID,
 		AccountID:  acct.ID,
 		Name:       "e2e",
 		SecretHash: auth.HashSecret(cred.Secret),
 		Enabled:    true,
-	}); err != nil {
+	}
+	if err := ts.store.CreateClient(t.Context(), client); err != nil {
 		t.Fatalf("CreateClient() error = %v", err)
 	}
 
-	return cred.String()
+	return cred.String(), acct, client
 }
 
 // register performs a registration handshake and returns the reply frame.
