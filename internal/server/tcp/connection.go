@@ -218,7 +218,9 @@ func (c *Connection) Handle() error {
 	c.subdomain = result.Subdomain
 	c.port = result.Port
 	c.tunnelConn = result.TunnelConn
-	c.tunnelConn.Conn = nil
+	// The tunnel connection is registered with a nil websocket (this is the raw
+	// TCP path), so Conn is already nil. Assigning it here again would race the
+	// write pump goroutine the manager starts at registration.
 
 	// Update lifecycle manager with registration info
 	if c.lifecycleManager != nil {
