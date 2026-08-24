@@ -89,8 +89,10 @@ function pad(n) { return String(n).padStart(2, '0'); }
 const state = {
   user: null,
   view: 'field',
+  server: null,
   accounts: [],
   clients: [],
+  reservations: [],
   linked: new Set(),   // subdomains lit at last render, for the energize moment
   seenLink: false,
 };
@@ -108,13 +110,82 @@ function tagClass(accountId) {
 }
 function canEdit() { return state.user && state.user.role === 'admin'; }
 
+// multiTenant reports whether account columns and tags distinguish anything.
+function multiTenant() { return state.accounts.length > 1; }
+
+// cols drops the entries whose `when` is false, keeping headers and cells aligned.
+function cols(entries) { return entries.filter(e => e.when !== false).map(e => e.value); }
+
 async function loadLookups() {
-  const [accounts, clients] = await Promise.all([
+  const [server, accounts, clients, reservations] = await Promise.all([
+    state.server ? Promise.resolve(state.server) : api('GET', '/api/server'),
     api('GET', '/api/accounts'),
     api('GET', '/api/clients'),
+    api('GET', '/api/reservations'),
   ]);
+  state.server = server || null;
   state.accounts = accounts || [];
   state.clients = clients || [];
+  state.reservations = reservations || [];
+}
+
+// ---- what a machine actually needs -------------------------------------
+
+// tunnelURL mirrors the server's own URL builder: the port is omitted at 443.
+function tunnelURL(subdomain) {
+  const s = state.server;
+  if (!s || !s.tunnel_domain || !subdomain) return '';
+  const host = `${subdomain}.${s.tunnel_domain}`;
+  return s.public_port === 443 ? `https://${host}` : `https://${host}:${s.public_port}`;
+}
+
+function tcpURL(port) {
+  const s = state.server;
+  if (!s || !s.tunnel_domain || !port) return '';
+  return `tcp://${s.tunnel_domain}:${port}`;
+}
+
+// allocationURL is the address an allocation resolves to once a machine binds it.
+function allocationURL(reservation) {
+  return reservation.subdomain
+    ? tunnelURL(reservation.subdomain)
+    : tcpURL(reservation.tcp_port);
+}
+
+// connectCommand is the line an operator pastes on the machine being connected.
+// The token only exists at issue time, so elsewhere it stands in as a placeholder.
+function connectCommand(token, localPort) {
+  const s = state.server;
+  const server = s && s.domain
+    ? `${s.domain}:${s.public_port || 443}`
+    : 'your-server:443';
+  return `drip http ${localPort || 8080} --server ${server} --token ${token}`;
+}
+
+// reservationFor finds the allocation a credential is bound to, if any.
+function reservationFor(clientId) {
+  return (state.reservations || []).find(r => r.client_id === clientId) || null;
+}
+
+// copyable renders a monospace strip with a copy button beside it.
+function copyable(value, label) {
+  const button = el('button', { type: 'button', class: 'btn-quiet small', text: 'Copy' });
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+    } catch (_) {
+      status('Could not reach the clipboard. Select the text and copy it manually.', true);
+    }
+  });
+  return el('div', { class: 'copyable' }, [
+    label ? el('span', { class: 'legend', text: label }) : null,
+    el('div', { class: 'copyable-row' }, [
+      el('code', { class: 'tag-strip', text: value }),
+      button,
+    ]),
+  ]);
 }
 
 // ---- shared pieces -------------------------------------------------------
@@ -189,20 +260,32 @@ function danger(label, confirmText, run) {
   return button;
 }
 
-function accountSelect(name) {
-  const sel = el('select', { name });
-  if (!state.accounts.length) {
-    sel.appendChild(el('option', { value: '', text: 'no accounts yet' }));
-    sel.disabled = true;
-    return sel;
+// accountField returns the account control for a form, or null when there is
+// nothing to decide. With a single account the id rides along as a hidden
+// input, so a one-tenant deployment never sees the concept at all.
+function accountField(name) {
+  if (state.accounts.length === 1) {
+    return el('input', { type: 'hidden', name, value: state.accounts[0].id });
   }
+  const sel = el('select', { name });
   for (const a of state.accounts) sel.appendChild(el('option', { value: a.id, text: a.name }));
-  return sel;
+  return labelled('Account', sel);
+}
+
+// hasAccount reports whether any account exists to attach things to.
+function hasAccount() { return state.accounts.length > 0; }
+
+// needsAccountFirst is the blank state shown when nothing can be created yet.
+function needsAccountFirst(what) {
+  return el('div', { class: 'blank' }, [
+    el('span', { class: 'legend', text: 'No account yet' }),
+    el('p', { class: 'note', text: `Every ${what} belongs to an account. Add one under Accounts first.` }),
+  ]);
 }
 
 function clientSelect(name) {
   const sel = el('select', { name });
-  sel.appendChild(el('option', { value: '', text: 'any client on the account' }));
+  sel.appendChild(el('option', { value: '', text: 'any machine on the account' }));
   for (const c of state.clients) sel.appendChild(el('option', { value: c.id, text: c.name }));
   return sel;
 }
@@ -247,10 +330,8 @@ function labelled(text, control, grow) {
 function portKey(r) { return r.subdomain || ('tcp-' + r.tcp_port); }
 
 async function viewField(root) {
-  const [reservations, tunnels] = await Promise.all([
-    api('GET', '/api/reservations'),
-    api('GET', '/api/tunnels'),
-  ]);
+  const reservations = state.reservations;
+  const tunnels = await api('GET', '/api/tunnels');
 
   const live = new Map();
   for (const t of tunnels || []) live.set(t.subdomain, t);
@@ -377,33 +458,38 @@ async function viewField(root) {
   // already answers "is it up", this answers "what is it doing".
   const linkedPorts = ports.filter(p => p.tunnel);
   if (linkedPorts.length) {
-    const rows = linkedPorts.map(p => el('tr', null, [
-      el('td', null, [el('span', { class: 'state' }, [
+    const rows = linkedPorts.map(p => el('tr', null, cols([
+      { value: el('td', null, [el('span', { class: 'state' }, [
         el('i', { class: tagClass(p.accountId) }),
         el('span', { class: 'mono', text: p.label }),
-      ])]),
-      el('td', { text: p.tunnel.tunnel_type }),
-      el('td', { text: p.clientId ? clientLabel(p.clientId) : 'unauthenticated' }),
-      el('td', { text: accountLabel(p.accountId) }),
-      el('td', { class: 'right', text: String(p.tunnel.active_connections) }),
-      el('td', { class: 'right', text: bytes(p.tunnel.bytes_in) }),
-      el('td', { class: 'right', text: bytes(p.tunnel.bytes_out) }),
-      el('td', { text: when(p.tunnel.last_active) }),
-    ]));
+      ])]) },
+      { value: el('td', { text: p.tunnel.tunnel_type }) },
+      { value: el('td', { text: p.clientId ? clientLabel(p.clientId) : 'unauthenticated' }) },
+      { value: el('td', { text: accountLabel(p.accountId) }), when: multiTenant() },
+      { value: el('td', { class: 'right', text: String(p.tunnel.active_connections) }) },
+      { value: el('td', { class: 'right', text: bytes(p.tunnel.bytes_in) }) },
+      { value: el('td', { class: 'right', text: bytes(p.tunnel.bytes_out) }) },
+      { value: el('td', { text: when(p.tunnel.last_active) }) },
+    ])));
 
     root.appendChild(panel(
       [el('span', { class: 'legend', text: 'Linked detail' })],
       [dataTable(
-        ['Port', 'Type', 'Client', 'Account',
-         { label: 'Conns', right: true }, { label: 'In', right: true },
-         { label: 'Out', right: true }, 'Last active'],
+        cols([
+          { value: 'Port' }, { value: 'Type' }, { value: 'Machine' },
+          { value: 'Account', when: multiTenant() },
+          { value: { label: 'Conns', right: true } },
+          { value: { label: 'In', right: true } },
+          { value: { label: 'Out', right: true } },
+          { value: 'Last active' },
+        ]),
         rows, '', '',
       )],
     ));
   }
 
   // Which colour tags which account, printed on the panel like a legend card.
-  if (state.accounts.length) {
+  if (multiTenant()) {
     root.appendChild(panel(
       [
         el('span', { class: 'legend', text: 'Tag legend' }),
@@ -421,19 +507,21 @@ async function viewField(root) {
 // ---- allocations ---------------------------------------------------------
 
 async function viewReservations(root) {
-  const list = await api('GET', '/api/reservations') || [];
+  const list = state.reservations;
 
   root.appendChild(head(
     'Allocations',
-    'A reserved subdomain or TCP port belongs to one account, and binds to the same client on every reconnect.',
+    'A reserved subdomain or TCP port. Bind it to a machine and that machine lands on the same URL every time it reconnects; leave it unbound and any machine may claim it by asking for the name.',
   ));
 
-  if (canEdit()) {
+  if (canEdit() && !hasAccount()) {
+    root.appendChild(panel(null, [needsAccountFirst('allocation')]));
+  } else if (canEdit()) {
     root.appendChild(panel(
       [el('span', { class: 'legend', text: 'Reserve a port' })],
       [bench([
-        labelled('Account', accountSelect('account_id')),
-        labelled('Client', clientSelect('client_id')),
+        accountField('account_id'),
+        labelled('Machine', clientSelect('client_id')),
         labelled('Subdomain', el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' }), true),
         labelled('or TCP port', el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' })),
         labelled('Bandwidth', el('input', { name: 'bandwidth', placeholder: '1M' })),
@@ -451,17 +539,17 @@ async function viewReservations(root) {
     ));
   }
 
-  const rows = list.map(r => el('tr', null, [
-    el('td', null, [el('span', { class: 'state' }, [
+  const rows = list.map(r => el('tr', null, cols([
+    { value: el('td', null, [el('span', { class: 'state' }, [
       el('i', { class: tagClass(r.account_id) }),
-      el('span', { class: 'mono', text: r.subdomain || `tcp ${r.tcp_port}` }),
-    ])]),
-    el('td', { text: r.tunnel_type }),
-    el('td', { text: accountLabel(r.account_id) }),
-    el('td', { text: clientLabel(r.client_id) }),
-    el('td', { text: r.bandwidth || '—' }),
-    el('td', null, [r.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]),
-    el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
+      el('span', { class: 'mono', text: allocationURL(r) || r.subdomain || `tcp ${r.tcp_port}` }),
+    ])]) },
+    { value: el('td', { text: r.tunnel_type }) },
+    { value: el('td', { text: accountLabel(r.account_id) }), when: multiTenant() },
+    { value: el('td', { text: clientLabel(r.client_id) }) },
+    { value: el('td', { text: r.bandwidth || '—' }) },
+    { value: el('td', null, [r.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]) },
+    { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
       el('button', {
         type: 'button', class: 'btn-quiet small', text: r.enabled ? 'Disable' : 'Enable',
         onclick: async (e) => {
@@ -477,13 +565,18 @@ async function viewReservations(root) {
         status('Allocation released.');
         await render();
       }),
-    ]) : null]),
-  ]));
+    ]) : null]) },
+  ])));
 
   root.appendChild(panel(
     [el('span', { class: 'legend', text: `${list.length} allocated` })],
     [dataTable(
-      ['Port', 'Type', 'Account', 'Client', 'Bandwidth', 'State', { label: '', right: true }],
+      cols([
+        { value: 'Port' }, { value: 'Type' },
+        { value: 'Account', when: multiTenant() },
+        { value: 'Machine' }, { value: 'Bandwidth' }, { value: 'State' },
+        { value: { label: '', right: true } },
+      ]),
       rows,
       'Nothing allocated',
       'Reserve a subdomain and every reconnect from that client lands on the same URL.',
@@ -496,14 +589,16 @@ async function viewReservations(root) {
 async function viewClients(root) {
   root.appendChild(head(
     'Credentials',
-    'One credential identifies one machine. The token is shown once, when it is issued or rotated.',
+    'One credential per machine. The machine presents it to connect; the token is shown once, when it is issued or rotated.',
   ));
 
-  if (canEdit()) {
+  if (canEdit() && !hasAccount()) {
+    root.appendChild(panel(null, [needsAccountFirst('credential')]));
+  } else if (canEdit()) {
     root.appendChild(panel(
       [el('span', { class: 'legend', text: 'Issue a credential' })],
       [bench([
-        labelled('Account', accountSelect('account_id')),
+        accountField('account_id'),
         labelled('Machine name', el('input', { name: 'name', placeholder: 'win-svc-01', required: true, autocapitalize: 'off', spellcheck: 'false' }), true),
         labelled('Bandwidth', el('input', { name: 'bandwidth', placeholder: '1M' })),
       ], 'Issue', async (data) => {
@@ -512,22 +607,27 @@ async function viewClients(root) {
           name: (data.get('name') || '').trim(),
           bandwidth: (data.get('bandwidth') || '').trim(),
         });
-        showToken(created.token);
+        showToken(created.token, created);
       })],
     ));
   }
 
-  const rows = state.clients.map(c => el('tr', null, [
-    el('td', null, [el('span', { class: 'state' }, [
+  const rows = state.clients.map(c => el('tr', null, cols([
+    { value: el('td', null, [el('span', { class: 'state' }, [
       el('i', { class: tagClass(c.account_id) }),
       el('span', { text: c.name }),
-    ])]),
-    el('td', { class: 'mono', text: c.id }),
-    el('td', { text: accountLabel(c.account_id) }),
-    el('td', { text: c.bandwidth || '—' }),
-    el('td', { text: when(c.last_seen_at) }),
-    el('td', null, [c.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]),
-    el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
+    ])]) },
+    { value: el('td', null, [(() => {
+      const reservation = reservationFor(c.id);
+      return reservation
+        ? el('span', { class: 'mono', text: allocationURL(reservation) })
+        : el('span', { class: 'legend', text: 'random name each connect' });
+    })()]) },
+    { value: el('td', { text: accountLabel(c.account_id) }), when: multiTenant() },
+    { value: el('td', { text: c.bandwidth || '—' }) },
+    { value: el('td', { text: when(c.last_seen_at) }) },
+    { value: el('td', null, [c.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]) },
+    { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
       el('button', {
         type: 'button', class: 'btn-quiet small', text: c.enabled ? 'Disable' : 'Enable',
         onclick: async (e) => {
@@ -540,7 +640,7 @@ async function viewClients(root) {
       }),
       danger('Rotate', 'Rotate? The old token dies now.', async () => {
         const out = await api('POST', `/api/clients/${c.id}/rotate`);
-        showToken(out.token);
+        showToken(out.token, c);
         await render();
       }),
       danger('Delete', 'Delete? Allocations become unbound.', async () => {
@@ -548,13 +648,18 @@ async function viewClients(root) {
         status('Credential deleted.');
         await render();
       }),
-    ]) : null]),
-  ]));
+    ]) : null]) },
+  ])));
 
   root.appendChild(panel(
     [el('span', { class: 'legend', text: `${state.clients.length} issued` })],
     [dataTable(
-      ['Machine', 'Credential ID', 'Account', 'Bandwidth', 'Last seen', 'State', { label: '', right: true }],
+      cols([
+        { value: 'Machine' }, { value: 'Address' },
+        { value: 'Account', when: multiTenant() },
+        { value: 'Bandwidth' }, { value: 'Last seen' }, { value: 'State' },
+        { value: { label: '', right: true } },
+      ]),
       rows,
       'No credentials issued',
       'A credential is what a machine presents to connect. Issue one per machine, then reserve a port for it.',
@@ -567,7 +672,7 @@ async function viewClients(root) {
 async function viewAccounts(root) {
   root.appendChild(head(
     'Accounts',
-    'An account owns credentials and allocations. Its colour tags every port on the field.',
+    'An account groups the machines and names belonging to one tenant, and caps how many tunnels they may open at once. Running this server for yourself? Keep the single default account and ignore this page — you only need more when separate customers or teams share the deployment.',
   ));
 
   if (canEdit()) {
@@ -653,29 +758,36 @@ async function viewAudit(root) {
 
 const tokenDialog = document.getElementById('token-dialog');
 
-function showToken(token) {
-  document.getElementById('token-value').textContent = token;
-  const copy = document.getElementById('token-copy');
-  copy.textContent = 'Copy token';
-  copy.disabled = false;
+function showToken(token, client) {
+  const body = document.getElementById('token-body');
+  body.textContent = '';
+
+  const reservation = client ? reservationFor(client.id) : null;
+  const url = reservation ? allocationURL(reservation) : '';
+
+  body.appendChild(copyable(connectCommand(token, 8080), 'Run this on the machine'));
+  body.appendChild(copyable(token, 'Token on its own'));
+
+  if (url) {
+    body.appendChild(el('p', { class: 'note' }, [
+      document.createTextNode('Once connected, this machine is reachable at '),
+      el('strong', { text: url }),
+      document.createTextNode('. It binds the same address on every reconnect.'),
+    ]));
+  } else {
+    body.appendChild(el('p', {
+      class: 'note',
+      text: 'This machine has no reserved name yet, so it will get a random one each time it connects. Reserve a port for it under Allocations to pin it.',
+    }));
+  }
+
+  tokenDialog.returnValue = '';
   tokenDialog.showModal();
 }
 
-document.getElementById('token-copy').addEventListener('click', async (e) => {
-  const token = document.getElementById('token-value').textContent;
-  try {
-    await navigator.clipboard.writeText(token);
-    e.target.textContent = 'Copied';
-    e.target.disabled = true;
-  } catch (_) {
-    // Clipboard access can be refused; the token stays selectable either way.
-    status('Could not reach the clipboard. Select the token and copy it manually.', true);
-  }
-});
-
 document.getElementById('token-done').addEventListener('click', () => {
   tokenDialog.close();
-  document.getElementById('token-value').textContent = '';
+  document.getElementById('token-body').textContent = '';
 });
 
 // The token cannot be recovered, so dismissing by Escape must be deliberate too.

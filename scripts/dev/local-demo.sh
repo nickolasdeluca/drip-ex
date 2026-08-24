@@ -61,24 +61,25 @@ if [ ! -f "$DEMO/cert.pem" ]; then
     -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN,IP:127.0.0.1" 2>/dev/null
 fi
 
+# One account is the normal case for a self-hosted deployment; the panel hides
+# the concept entirely at this size. Add a second to see the multi-tenant view.
 echo "==> seeding the control plane"
-"$DRIP" admin --db "$DB" account create acme --max-tunnels 12 >/dev/null
-"$DRIP" admin --db "$DB" account create northwind >/dev/null
+"$DRIP" admin --db "$DB" account create default >/dev/null
 
 issue() { # issue <account> <name> -> prints the token
   "$DRIP" admin --db "$DB" client create --account "$1" "$2" 2>/dev/null | awk '/token:/{print $2}'
 }
 
-TOKEN_A="$(issue acme edge-01)"
-TOKEN_B="$(issue northwind kiosk-02)"
+TOKEN_A="$(issue default edge-01)"
+TOKEN_B="$(issue default kiosk-02)"
 ID_A="$(echo "$TOKEN_A" | cut -d_ -f2)"
 ID_B="$(echo "$TOKEN_B" | cut -d_ -f2)"
 
-"$DRIP" admin --db "$DB" reservation create --account acme --subdomain billing --client "$ID_A" >/dev/null
-"$DRIP" admin --db "$DB" reservation create --account northwind --subdomain lobby-display --client "$ID_B" >/dev/null
+"$DRIP" admin --db "$DB" reservation create --account default --subdomain billing --client "$ID_A" >/dev/null
+"$DRIP" admin --db "$DB" reservation create --account default --subdomain lobby-display --client "$ID_B" >/dev/null
 # An allocation with no client connected, so the field shows a dark port too.
-"$DRIP" admin --db "$DB" reservation create --account acme --subdomain warehouse >/dev/null
-"$DRIP" admin --db "$DB" reservation create --account acme --tcp-port 20050 >/dev/null
+"$DRIP" admin --db "$DB" reservation create --account default --subdomain warehouse >/dev/null
+"$DRIP" admin --db "$DB" reservation create --account default --tcp-port 20050 >/dev/null
 
 echo "==> starting the server"
 "$DRIP" server \

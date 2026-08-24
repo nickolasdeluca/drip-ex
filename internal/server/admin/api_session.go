@@ -11,6 +11,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultAccountName is the account created alongside the first administrator.
+const defaultAccountName = "default"
+
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -94,6 +97,13 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.CreateAdminUser(r.Context(), user); err != nil {
 		writeError(w, storeStatus(err), err.Error())
 		return
+	}
+
+	// A fresh deployment gets an account to hang credentials off, so the
+	// operator is never asked to choose between things that do not exist yet.
+	// A single-tenant deployment can ignore accounts entirely from here on.
+	if _, aerr := s.store.CreateAccount(r.Context(), defaultAccountName, 0); aerr != nil {
+		s.logger.Warn("Failed to create the default account", zap.Error(aerr))
 	}
 
 	s.logger.Info("First administrator created", zap.String("username", user.Username))

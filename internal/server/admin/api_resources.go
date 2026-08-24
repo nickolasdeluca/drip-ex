@@ -452,6 +452,30 @@ func (s *Server) checkReservationClient(r *http.Request, reservation *store.Rese
 	return nil
 }
 
+// ---- deployment ----
+
+type serverInfoView struct {
+	Domain       string `json:"domain"`
+	TunnelDomain string `json:"tunnel_domain"`
+	PublicPort   int    `json:"public_port"`
+	TLS          bool   `json:"tls"`
+}
+
+// handleServerInfo tells the panel how clients reach this deployment, so it can
+// render real URLs and a runnable connection command instead of placeholders.
+func (s *Server) handleServerInfo(w http.ResponseWriter, _ *http.Request) {
+	d := s.deployment
+	if d.TunnelDomain == "" {
+		d.TunnelDomain = d.Domain
+	}
+	writeJSON(w, http.StatusOK, serverInfoView{
+		Domain:       d.Domain,
+		TunnelDomain: d.TunnelDomain,
+		PublicPort:   d.PublicPort,
+		TLS:          d.TLS,
+	})
+}
+
 // ---- live tunnels and audit ----
 
 type tunnelView struct {

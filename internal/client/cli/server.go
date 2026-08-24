@@ -547,7 +547,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			Address:       cfg.AdminAddress,
 			TLSConfig:     tlsConfig,
 			SessionTTL:    time.Duration(cfg.AdminSessionHours) * time.Hour,
-			Logger:        logger,
+			Deployment: admin.Deployment{
+				Domain:       cfg.Domain,
+				TunnelDomain: cfg.TunnelDomain,
+				PublicPort:   cfg.PublicPort,
+				TLS:          tlsConfig != nil,
+			},
+			Logger: logger,
 		})
 		if aerr != nil {
 			logger.Fatal("Failed to configure admin panel", zap.Error(aerr))

@@ -38,7 +38,24 @@ type Config struct {
 	// SessionTTL bounds a signed-in session. Zero uses DefaultSessionTTL.
 	SessionTTL time.Duration
 
+	// Deployment describes how clients reach this server, so the panel can show
+	// the URL an allocation resolves to and the command a machine must run.
+	Deployment Deployment
+
 	Logger *zap.Logger
+}
+
+// Deployment is the public shape of this server.
+type Deployment struct {
+	// Domain is where clients connect, e.g. tunnel.example.com.
+	Domain string
+	// TunnelDomain is what tunnel URLs sit under. Tunnels resolve to
+	// <subdomain>.<TunnelDomain>.
+	TunnelDomain string
+	// PublicPort is the port shown in URLs and connection commands.
+	PublicPort int
+	// TLS reports whether clients connect over TLS.
+	TLS bool
 }
 
 // Server is the admin panel HTTP server.
@@ -50,6 +67,7 @@ type Server struct {
 	httpServer    *http.Server
 	listener      net.Listener
 	sessionTTL    time.Duration
+	deployment    Deployment
 	secureCookies bool
 	limiter       *loginLimiter
 	logger        *zap.Logger
@@ -93,6 +111,7 @@ func New(cfg Config) (*Server, error) {
 		manager:       cfg.Manager,
 		authenticator: cfg.Authenticator,
 		sessionTTL:    ttl,
+		deployment:    cfg.Deployment,
 		secureCookies: tlsConfig != nil,
 		limiter:       newLoginLimiter(10, 15*time.Minute),
 		logger:        logger,
@@ -135,6 +154,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /api/session", s.handleLogin)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	mux.Handle("GET /api/server", s.authed(s.handleServerInfo))
 
 	// Authenticated.
 	mux.Handle("GET /api/session", s.authed(s.handleWhoami))
