@@ -48,6 +48,14 @@ type ServerConfig struct {
 	// reservation, turning the deployment into a closed fleet where every
 	// tunnel is pre-allocated in the admin panel.
 	ReservationsOnly bool `yaml:"reservations_only,omitempty"`
+	// AdminAddress enables the admin panel on its own listener, e.g.
+	// "127.0.0.1:8444". Administrative traffic never shares a port with tunnel
+	// traffic. The loopback default is deliberate: the panel has a first-run
+	// setup screen that is unauthenticated by necessity, so it should be
+	// reached over a VPN or an SSH tunnel rather than published.
+	AdminAddress string `yaml:"admin_address,omitempty"`
+	// AdminSessionHours bounds a signed-in panel session. 0 uses 12 hours.
+	AdminSessionHours int `yaml:"admin_session_hours,omitempty"`
 	// RequireAuth rejects registrations that carry no recognised credential.
 	// Without it a server with neither DBPath nor AuthToken accepts anyone,
 	// which is the historical single-user self-hosted default.
@@ -197,6 +205,14 @@ func (c *ServerConfig) Validate() error {
 
 	if c.RequireAuth && c.DBPath == "" && c.AuthToken == "" {
 		return fmt.Errorf("require_auth needs either db_path or token to be set")
+	}
+
+	if c.AdminAddress != "" && c.DBPath == "" {
+		return fmt.Errorf("admin_address needs db_path to be set: the panel manages the control plane database")
+	}
+
+	if c.AdminSessionHours < 0 {
+		return fmt.Errorf("admin_session_hours must be >= 0")
 	}
 
 	if c.ReservationsOnly && c.DBPath == "" {

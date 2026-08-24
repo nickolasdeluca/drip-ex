@@ -91,6 +91,18 @@ const (
 	RoleViewer = "viewer"
 )
 
+// AdminSession is a logged-in admin panel session. ID is the SHA-256 of the
+// session token; the token itself lives only in the operator's cookie.
+type AdminSession struct {
+	ID         string
+	UserID     string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	LastSeenAt time.Time
+	IP         string
+	UserAgent  string
+}
+
 // AuditEntry records a mutating action for later review.
 type AuditEntry struct {
 	ID         int64

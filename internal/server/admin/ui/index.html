@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Drip · patch panel</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!--
+THESIS: A tunnel is a patched port, not a row in a dashboard. This panel refuses
+the sidebar-and-cards admin template: allocation and link state are read off a
+physical port field, lit or dark, before any table or form is offered.
+OWN-WORLD: Anodized faceplate, silkscreened uppercase legends, hairline rules, a
+strict numbered margin. RJ45 keystones with link LEDs. Write-on designation
+strips. Account tags in Ethernet pair colours. One accent: link green.
+STORY: The operator sees what is allocated and what is live in one glance, then
+does one short errand — issue a credential, reserve a name, revoke a machine.
+FIRST VIEWPORT: Panel header with counts, then the port field at full width,
+ports at ~9rem. Primary actions live in the view they act on, never a global CTA.
+FORM: Patch panel; candidate 1 of my ordered list; seed key 3e15eb60.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="keystone" viewBox="0 0 32 24">
+    <path d="M2.5 2.5h27v19h-27z"/>
+    <path d="M11.5 21.5v-4h9v4"/>
+    <path d="M8 7v6M12 7v6M16 7v6M20 7v6M24 7v6"/>
+  </symbol>
+</svg>
+
+<div id="app" hidden>
+  <header class="chassis">
+    <div class="chassis-id">
+      <span class="unit">DRIP</span>
+      <span class="legend">patch panel</span>
+    </div>
+    <nav id="tabs" aria-label="Sections">
+      <button type="button" data-view="field" class="active">Field</button>
+      <button type="button" data-view="reservations">Allocations</button>
+      <button type="button" data-view="clients">Credentials</button>
+      <button type="button" data-view="accounts">Accounts</button>
+      <button type="button" data-view="audit">Log</button>
+    </nav>
+    <div class="chassis-session">
+      <span id="whoami" class="legend"></span>
+      <button type="button" id="signout" class="btn-quiet">Sign out</button>
+    </div>
+  </header>
+
+  <main id="view" aria-live="polite"></main>
+</div>
+
+<div id="gate" class="gate" hidden>
+  <form id="gate-form" class="plate" autocomplete="on">
+    <div class="plate-screws" aria-hidden="true"><i></i><i></i></div>
+    <p class="legend">Drip control plane</p>
+    <h1 id="gate-title">Sign in</h1>
+    <p id="gate-hint" class="note"></p>
+    <label class="field">
+      <span class="legend">Username</span>
+      <input name="username" autocomplete="username" required autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span class="legend">Password</span>
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn">Continue</button>
+    <p id="gate-error" class="alert" role="alert" hidden></p>
+  </form>
+</div>
+
+<dialog id="token-dialog" class="tag-dialog" aria-labelledby="token-title">
+  <p class="legend">Issued once</p>
+  <h2 id="token-title">Credential token</h2>
+  <p class="note">This is the only time the token is shown. It cannot be recovered — rotating the credential is the only way to get a new one.</p>
+  <output id="token-value" class="tag-strip"></output>
+  <div class="tag-actions">
+    <button type="button" id="token-copy" class="btn">Copy token</button>
+    <button type="button" id="token-done" class="btn-quiet">I have saved it</button>
+  </div>
+</dialog>
+
+<p id="status" class="status" role="status" hidden></p>
+
+<script src="/app.js"></script>
+</body>
+</html>

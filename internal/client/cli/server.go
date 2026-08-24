@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"drip/internal/server/admin"
 	"drip/internal/server/auth"
 	"drip/internal/server/proxy"
 	"drip/internal/server/reservations"
@@ -48,6 +49,7 @@ var (
 	serverDBPath              string
 	serverRequireAuth         bool
 	serverReservationsOnly    bool
+	serverAdminAddress        string
 	serverTLSMode             string
 	serverACMEEmail           string
 	serverACMEDNSProvider     string
@@ -102,6 +104,7 @@ func init() {
 	serverCmd.Flags().StringVar(&serverTunnelTypes, "tunnel-types", getEnvString("DRIP_TUNNEL_TYPES", "http,https,tcp"), "Allowed tunnel types: http,https,tcp (env: DRIP_TUNNEL_TYPES)")
 	// Control plane
 	serverCmd.Flags().StringVar(&serverDBPath, "db", getEnvString("DRIP_DB_PATH", ""), "Path to the control plane SQLite database; enables client credentials and reservations (env: DRIP_DB_PATH)")
+	serverCmd.Flags().StringVar(&serverAdminAddress, "admin", getEnvString("DRIP_ADMIN_ADDRESS", ""), "Serve the admin panel on this address, e.g. 127.0.0.1:8444 (env: DRIP_ADMIN_ADDRESS)")
 	serverCmd.Flags().BoolVar(&serverReservationsOnly, "reservations-only", getEnvBool("DRIP_RESERVATIONS_ONLY", false), "Reject registrations that do not bind a reservation (env: DRIP_RESERVATIONS_ONLY)")
 	serverCmd.Flags().BoolVar(&serverRequireAuth, "require-auth", getEnvBool("DRIP_REQUIRE_AUTH", false), "Reject registrations without a recognised credential (env: DRIP_REQUIRE_AUTH)")
 
@@ -256,6 +259,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		cfg.RequireAuth = serverRequireAuth
 	} else if os.Getenv("DRIP_REQUIRE_AUTH") != "" {
 		cfg.RequireAuth = serverRequireAuth
+	}
+
+	// AdminAddress
+	if cmd.Flags().Changed("admin") {
+		cfg.AdminAddress = serverAdminAddress
+	} else if os.Getenv("DRIP_ADMIN_ADDRESS") != "" {
+		cfg.AdminAddress = serverAdminAddress
 	}
 
 	// ReservationsOnly
@@ -528,6 +538,38 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		zap.Strings("transports", cfg.AllowedTransports),
 		zap.Strings("tunnel_types", cfg.AllowedTunnelTypes),
 	)
+
+	if cfg.AdminAddress != "" {
+		adminServer, aerr := admin.New(admin.Config{
+			Store:         controlStore,
+			Manager:       tunnelManager,
+			Authenticator: authenticator,
+			Address:       cfg.AdminAddress,
+			TLSConfig:     tlsConfig,
+			SessionTTL:    time.Duration(cfg.AdminSessionHours) * time.Hour,
+			Logger:        logger,
+		})
+		if aerr != nil {
+			logger.Fatal("Failed to configure admin panel", zap.Error(aerr))
+		}
+		if aerr := adminServer.Start(); aerr != nil {
+			logger.Fatal("Failed to start admin panel", zap.Error(aerr))
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if serr := adminServer.Stop(shutdownCtx); serr != nil {
+				logger.Error("Error stopping admin panel", zap.Error(serr))
+			}
+		}()
+
+		count, cerr := controlStore.CountAdminUsers(context.Background())
+		if cerr == nil && count == 0 {
+			logger.Warn("Admin panel has no administrator yet; the first-run setup screen is open to anyone who can reach it",
+				zap.String("address", cfg.AdminAddress),
+			)
+		}
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

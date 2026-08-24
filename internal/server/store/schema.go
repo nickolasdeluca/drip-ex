@@ -91,4 +91,21 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX idx_audit_at ON audit_log(at DESC);
 `,
+
+	// 2: admin panel sessions
+	`
+CREATE TABLE admin_sessions (
+	-- id is the SHA-256 of the session token, never the token itself, so a
+	-- database leak cannot be replayed as a live session.
+	id           TEXT PRIMARY KEY,
+	user_id      TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+	created_at   INTEGER NOT NULL,
+	expires_at   INTEGER NOT NULL,
+	last_seen_at INTEGER NOT NULL,
+	ip           TEXT NOT NULL DEFAULT '',
+	user_agent   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_admin_sessions_user ON admin_sessions(user_id);
+CREATE INDEX idx_admin_sessions_expires ON admin_sessions(expires_at);
+`,
 }
