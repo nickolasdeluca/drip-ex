@@ -271,13 +271,16 @@ DNS 服务商的 API 凭据。目前内置 Cloudflare；新增服务商只需一
 
 ### Docker
 
+目前不发布容器镜像，Docker 暂不受支持，但 Dockerfile 和 compose 文件都在仓库里，
+可以在本地构建：
+
 ```bash
 cd deployments
 cp config.acme.example.yaml config.yaml   # 修改域名、DNS token、邮箱
-docker compose up -d
+docker compose up -d --build
 ```
 
-`deployments/` 目录下提供了现成的 compose 文件和示例：
+`deployments/` 目录下提供了 compose 文件和示例：
 
 | 文件 | |
 |---|---|
@@ -287,12 +290,6 @@ docker compose up -d
 | `config.acme.example.yaml` | 自动通配符证书 |
 | `config.caddy.example.yaml` | 位于反向代理之后 |
 | `Caddyfile`、`nginx.example.conf` | 反向代理示例 |
-
-每次打 tag 发布时，镜像都会推送到 GitHub Container Registry：
-
-```bash
-docker pull ghcr.io/nickolasdeluca/drip-server:latest
-```
 
 ### 二进制
 

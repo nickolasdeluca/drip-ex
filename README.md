@@ -280,13 +280,16 @@ a provider is one import plus one entry in `internal/server/tls/dns.go`.
 
 ### Docker
 
+No container image is published — Docker is unsupported for now — but the
+Dockerfile and compose files are here and build locally:
+
 ```bash
 cd deployments
 cp config.acme.example.yaml config.yaml   # edit: domain, DNS token, email
-docker compose up -d
+docker compose up -d --build
 ```
 
-`deployments/` holds ready-made compose files and examples:
+`deployments/` holds the compose files and examples:
 
 | File | |
 |---|---|
@@ -296,12 +299,6 @@ docker compose up -d
 | `config.acme.example.yaml` | Automatic wildcard certificates |
 | `config.caddy.example.yaml` | Behind a reverse proxy |
 | `Caddyfile`, `nginx.example.conf` | Reverse proxy examples |
-
-Images are published to the GitHub Container Registry on every tagged release:
-
-```bash
-docker pull ghcr.io/nickolasdeluca/drip-server:latest
-```
 
 ### Binary
 

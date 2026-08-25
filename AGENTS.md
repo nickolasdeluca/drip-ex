@@ -243,16 +243,18 @@ PowerShell installer matches on the platform and architecture within it.
 | `ci.yml` | push to main, every PR | `go test -race`, `go vet`, staticcheck, gosec, govulncheck |
 | `release.yml` | tag `v*.*.*` | GoReleaser build published to GitHub Releases |
 | `release.yml` | manual dispatch | Snapshot archives as workflow artifacts, nothing published |
-| `docker.yml` | push to main | `ghcr.io/<owner>/drip-server:edge` |
-| `docker.yml` | tag `v*.*.*` | `ghcr.io/<owner>/drip-server:<version>`, `:<major>.<minor>`, `:latest` |
+| `docker.yml` | manual dispatch only | Nothing by default — see below |
 
-- **The container registry is GHCR, authenticated with the built-in
-  `GITHUB_TOKEN`.** There are no registry secrets to configure; the earlier Docker
-  Hub workflow needed `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, which this fork
-  never had, so every tagged build would have failed.
+- **No container image is published, deliberately.** Docker is unsupported for
+  now, so `docker.yml` has had its push triggers commented out and only runs when
+  someone starts it by hand. It still targets GHCR with the built-in
+  `GITHUB_TOKEN`; restoring the commented `push:` block is all it takes to turn
+  publishing back on. Do not "fix" the workflow by re-adding those triggers.
+- **The compose files build the image locally** (`docker compose up -d --build`)
+  because no published image exists to pull. They must not point at a registry
+  tag that nothing produces.
 - **GitHub Packages cannot host loose binaries.** Executables go to Releases,
-  container images go to GHCR. There is no third option, and the installers read
-  from Releases.
+  which is what the installers read from.
 - **`Dockerfile.server`'s builder stage is pinned to `$BUILDPLATFORM`.** CGO is
   off and `GOARCH` comes from `TARGETARCH`, so the arm64 image cross-compiles on
   an amd64 runner. Dropping that pin makes the build run under QEMU, which is

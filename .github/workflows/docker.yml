@@ -1,9 +1,13 @@
 name: Docker
 
+# Parked: no container image is published for now. The workflow is kept so image
+# publishing can be turned back on by restoring the push triggers below, but it
+# never fires on its own — only a manual run from the Actions tab.
+#
+#  push:
+#    branches: [ main ]
+#    tags: [ "v*.*.*" ]
 on:
-  push:
-    branches: [ main ]
-    tags: [ "v*.*.*" ]
   workflow_dispatch:
 
 permissions:
