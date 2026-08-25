@@ -83,7 +83,16 @@ bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/sc
 ```
 
 The script asks whether you are installing the **client** or the **server**,
-downloads the matching release and puts `drip` on your PATH.
+downloads the matching release and puts `drip` on your PATH. Every download is
+checked against the SHA-256 the release publishes; a mismatch aborts the install.
+
+### Updating
+
+Re-run the same command. The installer detects an existing `drip`, compares it
+against the latest release and offers to update — your configuration is left
+alone. On the server it stops `drip-server`, swaps the binary and starts it
+again; if the new version fails to start, it restores the previous binary and
+brings the service back up.
 
 ### Windows
 

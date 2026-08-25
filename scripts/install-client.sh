@@ -10,6 +10,11 @@ VERSION="${VERSION:-}"
 BINARY_NAME="drip"
 UNINSTALL_MODE=false
 COMMAND_MADE_AVAILABLE=false
+IS_UPDATE=false
+
+# Scratch directory for the download, removed on exit.
+TMP_WORK_DIR=""
+DOWNLOADED_BINARY=""
 
 # Colors
 RED='\033[0;31m'
@@ -76,6 +81,12 @@ msg_en() {
         no) echo "n" ;;
         press_enter) echo "Press Enter to continue..." ;;
         windows_note) echo "For Windows, please download the .exe file from GitHub Releases" ;;
+        verifying_checksum) echo "Verifying the download..." ;;
+        checksum_ok) echo "Checksum verified" ;;
+        checksum_missing) echo "The release has no checksum file; refusing to install an unverified binary" ;;
+        checksum_unknown) echo "The checksum file does not list this archive" ;;
+        checksum_failed) echo "Checksum mismatch; the download is corrupt or tampered with" ;;
+        no_sha256) echo "No SHA-256 tool found (sha256sum, shasum or openssl)" ;;
         already_installed) echo "Drip is already installed" ;;
         current_version) echo "Current version" ;;
         update_now) echo "Update to the latest version?" ;;
@@ -148,6 +159,12 @@ msg_zh() {
         no) echo "n" ;;
         press_enter) echo "按 Enter 继续..." ;;
         windows_note) echo "Windows 用户请从 GitHub Releases 下载 .exe 文件" ;;
+        verifying_checksum) echo "正在校验下载文件..." ;;
+        checksum_ok) echo "校验通过" ;;
+        checksum_missing) echo "该版本没有校验文件；拒绝安装未经校验的二进制文件" ;;
+        checksum_unknown) echo "校验文件中没有该压缩包" ;;
+        checksum_failed) echo "校验值不匹配；下载文件已损坏或被篡改" ;;
+        no_sha256) echo "未找到 SHA-256 工具（sha256sum、shasum 或 openssl）" ;;
         already_installed) echo "Drip 已安装" ;;
         current_version) echo "当前版本" ;;
         update_now) echo "是否更新到最新版本？" ;;
@@ -410,29 +427,44 @@ check_existing_install() {
 # ============================================================================
 # Download and install
 # ============================================================================
-get_download_url() {
-    # Get latest version if not set
+# resolve_version fills VERSION in the caller's shell. It must not be run from a
+# command substitution: the assignment would be lost with the subshell, leaving
+# the download URL without a version.
+resolve_version() {
     if [[ -z "$VERSION" ]]; then
         VERSION=$(get_latest_version)
     fi
+}
 
+get_archive_name() {
     # Strip 'v' prefix for archive filename (v0.7.0 -> 0.7.0)
     local version_number="${VERSION#v}"
-
-    local archive_name
     local ext="tar.gz"
 
     if [[ "$OS" == "windows" ]]; then
-        archive_name="drip_${version_number}_windows_${ARCH}.${ext}"
+        echo "drip_${version_number}_windows_${ARCH}.${ext}"
     else
-        archive_name="drip_${version_number}_${OS}_${ARCH}.${ext}"
+        echo "drip_${version_number}_${OS}_${ARCH}.${ext}"
     fi
+}
 
-    echo "https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${archive_name}"
+get_checksums_name() {
+    local version_number="${VERSION#v}"
+    echo "drip_${version_number}_checksums.txt"
+}
+
+get_download_url() {
+    echo "https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/$(get_archive_name)"
 }
 
 download_binary() {
-    local url=$(get_download_url)
+    resolve_version
+
+    local archive_name
+    archive_name=$(get_archive_name)
+    local url
+    url=$(get_download_url)
+    local checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/$(get_checksums_name)"
 
     if [[ "$IS_UPDATE" == true ]]; then
         print_step "$(msg updating)..."
@@ -440,11 +472,12 @@ download_binary() {
         print_step "$(msg downloading)..."
     fi
 
-    local tmp_archive="/tmp/drip-archive.tar.gz"
-    local tmp_dir="/tmp/drip-extract"
-
-    # Clean up any previous extraction
-    rm -rf "$tmp_dir"
+    # A private scratch directory; fixed /tmp paths are writable by every local
+    # user, and this script may run under sudo.
+    TMP_WORK_DIR=$(mktemp -d)
+    local tmp_archive="${TMP_WORK_DIR}/${archive_name}"
+    local tmp_checksums="${TMP_WORK_DIR}/checksums.txt"
+    local tmp_dir="${TMP_WORK_DIR}/extract"
     mkdir -p "$tmp_dir"
 
     if command -v curl &> /dev/null; then
@@ -460,6 +493,8 @@ download_binary() {
             exit 1
         fi
     fi
+
+    verify_checksum "$tmp_archive" "$archive_name" "$checksums_url" "$tmp_checksums"
 
     # Extract the archive
     if ! tar -xzf "$tmp_archive" -C "$tmp_dir"; then
@@ -480,14 +515,77 @@ download_binary() {
         exit 1
     fi
 
-    # Move to standard location
-    mv "$extracted_binary" /tmp/drip-download
-    chmod +x /tmp/drip-download
-
-    # Clean up
-    rm -rf "$tmp_archive" "$tmp_dir"
+    DOWNLOADED_BINARY="${TMP_WORK_DIR}/drip-download"
+    mv "$extracted_binary" "$DOWNLOADED_BINARY"
+    chmod +x "$DOWNLOADED_BINARY"
 
     print_success "$(msg download_ok)"
+}
+
+# sha256_of prints the SHA-256 of a file, trying the tools most likely to be
+# present. macOS ships shasum rather than sha256sum.
+sha256_of() {
+    local file="$1"
+
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl &> /dev/null; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+
+# verify_checksum refuses to continue unless the archive matches the SHA-256 the
+# release publishes for it. Failing closed is the point: this script is run by
+# piping a URL into a shell, so the binary it fetches deserves a check.
+verify_checksum() {
+    local archive="$1"
+    local archive_name="$2"
+    local checksums_url="$3"
+    local checksums_file="$4"
+
+    print_step "$(msg verifying_checksum)"
+
+    local actual
+    if ! actual=$(sha256_of "$archive"); then
+        print_error "$(msg no_sha256)"
+        exit 1
+    fi
+
+    if command -v curl &> /dev/null; then
+        if ! curl -fsSL "$checksums_url" -o "$checksums_file"; then
+            print_error "$(msg checksum_missing)"
+            exit 1
+        fi
+    else
+        if ! wget -q "$checksums_url" -O "$checksums_file"; then
+            print_error "$(msg checksum_missing)"
+            exit 1
+        fi
+    fi
+
+    # goreleaser writes "<sha256>  <filename>"; some tools prefix the name with
+    # an asterisk to mark binary mode.
+    local expected
+    expected=$(awk -v name="$archive_name" \
+        '$2 == name || $2 == "*" name { print $1; exit }' "$checksums_file")
+
+    if [[ -z "$expected" ]]; then
+        print_error "$(msg checksum_unknown): $archive_name"
+        exit 1
+    fi
+
+    if [[ "$expected" != "$actual" ]]; then
+        print_error "$(msg checksum_failed)"
+        print_info "expected: $expected"
+        print_info "actual:   $actual"
+        exit 1
+    fi
+
+    print_success "$(msg checksum_ok)"
 }
 
 select_install_dir() {
@@ -539,10 +637,10 @@ install_binary() {
 
     # Install binary
     if [[ "$NEED_SUDO" == true ]]; then
-        sudo mv /tmp/drip-download "$target_path"
+        sudo mv "$DOWNLOADED_BINARY" "$target_path"
         sudo chmod +x "$target_path"
     else
-        mv /tmp/drip-download "$target_path"
+        mv "$DOWNLOADED_BINARY" "$target_path"
         chmod +x "$target_path"
     fi
 
@@ -844,6 +942,13 @@ uninstall_client() {
 # ============================================================================
 # Main
 # ============================================================================
+# cleanup_tmp removes the download scratch directory however the script exits.
+cleanup_tmp() {
+    [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" ]] && rm -rf "$TMP_WORK_DIR"
+    return 0
+}
+trap cleanup_tmp EXIT
+
 main() {
     if [[ "$1" == "--uninstall" || "$1" == "uninstall" ]]; then
         UNINSTALL_MODE=true

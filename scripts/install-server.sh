@@ -11,6 +11,13 @@ CONFIG_DIR="/etc/drip"
 WORK_DIR="/var/lib/drip"
 VERSION="${VERSION:-}"
 COMMAND_MADE_AVAILABLE=false
+IS_UPDATE=false
+
+# Set while an update is in flight so a failed restart can be rolled back.
+BACKUP_BINARY=""
+# Scratch directory for the download, removed on exit.
+TMP_WORK_DIR=""
+DOWNLOADED_BINARY=""
 
 # Default values
 DEFAULT_PORT=8443
@@ -113,6 +120,15 @@ MSG_EN=(
     ["invalid_port"]="Invalid port number"
     ["enter_public_port"]="Enter public port (for URL display, e.g., behind reverse proxy)"
     ["wildcard_cert_note"]="Note: For subdomain tunnels, you need a wildcard certificate (*.domain.com)"
+    ["verifying_checksum"]="Verifying the download..."
+    ["checksum_ok"]="Checksum verified"
+    ["checksum_missing"]="The release has no checksum file; refusing to install an unverified binary"
+    ["checksum_unknown"]="The checksum file does not list this archive"
+    ["checksum_failed"]="Checksum mismatch; the download is corrupt or tampered with"
+    ["no_sha256"]="No SHA-256 tool found (sha256sum, shasum or openssl). Install coreutils and retry."
+    ["rolling_back"]="Restoring the previous binary..."
+    ["rollback_ok"]="Rolled back"
+    ["rollback_failed"]="Rollback failed; the server is down and needs manual attention"
     ["already_installed"]="Drip server is already installed"
     ["current_version"]="Current version"
     ["update_now"]="Update to the latest version?"
@@ -204,6 +220,15 @@ MSG_ZH=(
     ["invalid_port"]="无效的端口号"
     ["enter_public_port"]="输入公开端口（用于 URL 显示，如在反向代理后）"
     ["wildcard_cert_note"]="注意：要支持子域名隧道，需要通配符证书（*.domain.com）"
+    ["verifying_checksum"]="正在校验下载文件..."
+    ["checksum_ok"]="校验通过"
+    ["checksum_missing"]="该版本没有校验文件；拒绝安装未经校验的二进制文件"
+    ["checksum_unknown"]="校验文件中没有该压缩包"
+    ["checksum_failed"]="校验值不匹配；下载文件已损坏或被篡改"
+    ["no_sha256"]="未找到 SHA-256 工具（sha256sum、shasum 或 openssl）。请安装 coreutils 后重试。"
+    ["rolling_back"]="正在恢复上一个版本的二进制文件..."
+    ["rollback_ok"]="已回滚"
+    ["rollback_failed"]="回滚失败；服务已停止，需要人工处理"
     ["already_installed"]="Drip 服务器已安装"
     ["current_version"]="当前版本"
     ["update_now"]="是否更新到最新版本？"
@@ -514,11 +539,15 @@ download_binary() {
     local archive_name="drip_${version_number}_linux_${ARCH}.tar.gz"
     local download_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${archive_name}"
 
-    local tmp_archive="/tmp/drip-archive.tar.gz"
-    local tmp_dir="/tmp/drip-extract"
+    local checksums_name="drip_${version_number}_checksums.txt"
+    local checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${checksums_name}"
 
-    # Clean up any previous extraction
-    rm -rf "$tmp_dir"
+    # A private scratch directory: this runs as root, and fixed /tmp paths are
+    # writable by every local user.
+    TMP_WORK_DIR=$(mktemp -d)
+    local tmp_archive="${TMP_WORK_DIR}/${archive_name}"
+    local tmp_checksums="${TMP_WORK_DIR}/${checksums_name}"
+    local tmp_dir="${TMP_WORK_DIR}/extract"
     mkdir -p "$tmp_dir"
 
     if command -v curl &> /dev/null; then
@@ -535,6 +564,8 @@ download_binary() {
         fi
     fi
 
+    verify_checksum "$tmp_archive" "$archive_name" "$checksums_url" "$tmp_checksums"
+
     # Extract the archive
     if ! tar -xzf "$tmp_archive" -C "$tmp_dir"; then
         print_error "Failed to extract archive"
@@ -550,21 +581,92 @@ download_binary() {
         exit 1
     fi
 
-    # Move to standard location
-    mv "$extracted_binary" /tmp/drip
-    chmod +x /tmp/drip
-
-    # Clean up
-    rm -rf "$tmp_archive" "$tmp_dir"
+    DOWNLOADED_BINARY="${TMP_WORK_DIR}/drip"
+    mv "$extracted_binary" "$DOWNLOADED_BINARY"
+    chmod +x "$DOWNLOADED_BINARY"
 
     print_success "$(msg download_ok)"
+}
+
+# sha256_of prints the SHA-256 of a file, trying the tools most likely to be
+# present. Verification fails closed: an unverifiable download is not installed.
+sha256_of() {
+    local file="$1"
+
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl &> /dev/null; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+
+# verify_checksum refuses to continue unless the archive matches the SHA-256 the
+# release publishes for it. This script installs a binary that runs as a service
+# on a public host; an unverified download is not worth the convenience.
+verify_checksum() {
+    local archive="$1"
+    local archive_name="$2"
+    local checksums_url="$3"
+    local checksums_file="$4"
+
+    print_step "$(msg verifying_checksum)"
+
+    local actual
+    if ! actual=$(sha256_of "$archive"); then
+        print_error "$(msg no_sha256)"
+        exit 1
+    fi
+
+    if command -v curl &> /dev/null; then
+        if ! curl -fsSL "$checksums_url" -o "$checksums_file"; then
+            print_error "$(msg checksum_missing)"
+            exit 1
+        fi
+    else
+        if ! wget -q "$checksums_url" -O "$checksums_file"; then
+            print_error "$(msg checksum_missing)"
+            exit 1
+        fi
+    fi
+
+    # goreleaser writes "<sha256>  <filename>"; some tools prefix the name with
+    # an asterisk to mark binary mode.
+    local expected
+    expected=$(awk -v name="$archive_name" \
+        '$2 == name || $2 == "*" name { print $1; exit }' "$checksums_file")
+
+    if [[ -z "$expected" ]]; then
+        print_error "$(msg checksum_unknown): $archive_name"
+        exit 1
+    fi
+
+    if [[ "$expected" != "$actual" ]]; then
+        print_error "$(msg checksum_failed)"
+        print_info "expected: $expected"
+        print_info "actual:   $actual"
+        exit 1
+    fi
+
+    print_success "$(msg checksum_ok)"
 }
 
 install_binary() {
     print_step "$(msg installing)"
 
     mkdir -p "$INSTALL_DIR"
-    mv /tmp/drip "$INSTALL_DIR/drip"
+
+    # Keep the outgoing binary so a failed restart can be rolled back. It is
+    # removed once the service comes up on the new one.
+    if [[ "$IS_UPDATE" == true && -f "$INSTALL_DIR/drip" ]]; then
+        BACKUP_BINARY="${INSTALL_DIR}/drip.previous"
+        cp -p "$INSTALL_DIR/drip" "$BACKUP_BINARY"
+    fi
+
+    mv "$DOWNLOADED_BINARY" "$INSTALL_DIR/drip"
     chmod +x "$INSTALL_DIR/drip"
 
     if [[ "$IS_UPDATE" == true ]]; then
@@ -1103,6 +1205,32 @@ show_completion() {
 # ============================================================================
 # Main
 # ============================================================================
+
+# cleanup_tmp removes the download scratch directory however the script exits.
+cleanup_tmp() {
+    [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" ]] && rm -rf "$TMP_WORK_DIR"
+    return 0
+}
+trap cleanup_tmp EXIT
+
+# rollback_binary restores the previous binary after an update that will not
+# start. Leaving a host with a broken server is worse than leaving it on the
+# old version.
+rollback_binary() {
+    [[ -n "$BACKUP_BINARY" && -f "$BACKUP_BINARY" ]] || return 0
+
+    print_step "$(msg rolling_back)"
+    mv "$BACKUP_BINARY" "$INSTALL_DIR/drip"
+    chmod +x "$INSTALL_DIR/drip"
+    BACKUP_BINARY=""
+
+    if systemctl start drip-server 2>/dev/null && systemctl is-active --quiet drip-server; then
+        print_success "$(msg rollback_ok): $(get_version_from_binary "$INSTALL_DIR/drip")"
+    else
+        print_error "$(msg rollback_failed)"
+    fi
+}
+
 main() {
     clear
     print_banner
@@ -1135,9 +1263,12 @@ main() {
 
             if systemctl is-active --quiet drip-server; then
                 print_success "$(msg service_started)"
+                [[ -n "$BACKUP_BINARY" ]] && rm -f "$BACKUP_BINARY"
+                BACKUP_BINARY=""
             else
                 print_error "$(msg service_failed)"
                 journalctl -u drip-server -n 20 --no-pager
+                rollback_binary
                 exit 1
             fi
 

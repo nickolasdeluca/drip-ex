@@ -81,7 +81,13 @@ bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/sc
 ```
 
 脚本会先询问安装**客户端**还是**服务端**，然后下载对应的发行版并把 `drip` 加入
-PATH。
+PATH。每次下载都会与发行版公布的 SHA-256 校验值比对，不匹配则中止安装。
+
+### 更新
+
+重新运行同一条命令即可。安装脚本会检测已有的 `drip`，与最新版本比较后询问是否更新，
+配置文件不受影响。在服务端它会停止 `drip-server`、替换二进制文件再启动；如果新版本
+启动失败，则恢复上一个二进制文件并重新拉起服务。
 
 ### Windows
 
