@@ -46,5 +46,8 @@ archives:
   - formats: [tar.gz]
 
 release:
-  prerelease: true
+  # auto marks a release as a pre-release only when the tag carries a suffix
+  # such as -rc1. Marking every release as one hides it from the
+  # /releases/latest API, which is what the installers query.
+  prerelease: auto
   mode: replace
