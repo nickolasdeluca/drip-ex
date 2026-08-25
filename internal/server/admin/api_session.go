@@ -207,6 +207,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			s.logger.Warn("Failed to delete session", zap.Error(err))
 		}
 	}
-	s.clearSessionCookies(w)
+	s.clearSessionCookies(w, r)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "signed out"})
 }

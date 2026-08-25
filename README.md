@@ -79,12 +79,27 @@ shared token or none at all.
 ### Linux and macOS
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh)
+curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh | bash
+```
+
+The server install writes to `/usr/local/bin` and registers a systemd unit, so
+it has to run as root:
+
+```bash
+curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh | sudo bash
 ```
 
 The script asks whether you are installing the **client** or the **server**,
 downloads the matching release and puts `drip` on your PATH. Every download is
 checked against the SHA-256 the release publishes; a mismatch aborts the install.
+The prompts read from `/dev/tty`, so they still work when the script arrives on
+stdin.
+
+> Do not run it as `sudo bash <(curl ...)`. Process substitution hands `bash` a
+> `/dev/fd/63` path that only exists inside the calling shell, and `sudo` closes
+> inherited file descriptors before exec, so root sees
+> `bash: /dev/fd/63: No such file or directory`. Piping into `sudo bash` avoids
+> the problem, as does downloading the script first.
 
 ### Updating
 
@@ -409,6 +424,31 @@ Brazilian Portuguese ship; the language follows the browser.
 
 Reach it over a private network, a VPN or an SSH tunnel — exposing it publicly is
 discouraged, especially before that first-run screen has been used.
+
+### Publishing the panel
+
+A managed deployment can also serve the panel on the server domain, over the
+public HTTPS port, in place of the landing page:
+
+```bash
+drip server --db /var/lib/drip/drip.db --admin 127.0.0.1:8444 --admin-public
+```
+
+`--admin-public` is an addition, not a move: the panel keeps its own listener,
+so an operator locked out of the public mount still has a loopback way in, and
+`--admin` therefore stays required.
+
+What the published mount does *not* serve is first-run setup. It refuses every
+request until an administrator exists, and refuses `POST /api/bootstrap` for
+good, so the unauthenticated setup screen is reachable only on the panel's own
+address. Sign-in is throttled per source address and per username either way.
+
+The landing page moves to `/install`, and tunnel subdomains are untouched: only
+a request whose `Host` is exactly the server domain reaches the panel.
+
+Behind a TLS-terminating reverse proxy, note that sign-in throttling counts the
+address the connection arrives from — every client looks like the proxy, so the
+per-username half of the limit is the one doing the work.
 
 ---
 

@@ -65,6 +65,16 @@ acme:
 db_path: /var/lib/drip/control.db
 require_auth: true
 
+# Admin panel. It always gets a listener of its own; loopback is the default
+# because first-run setup is unauthenticated by necessity.
+admin_address: 127.0.0.1:8444
+
+# Also serve the panel on `domain` over the public port, in place of the
+# landing page. The public mount never serves first-run setup: it stays shut
+# until an administrator exists, and refuses the bootstrap endpoint for good,
+# so the account is created over the loopback address above.
+# admin_public: true
+
 # Closed fleet: every tunnel must be pre-allocated in the control plane.
 # Leave false to let authenticated clients also open ad-hoc tunnels.
 # reservations_only: true

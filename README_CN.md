@@ -77,11 +77,23 @@
 ### Linux 和 macOS
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh)
+curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh | bash
+```
+
+服务端安装需要写入 `/usr/local/bin` 并注册 systemd 服务，因此必须以 root 运行：
+
+```bash
+curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh | sudo bash
 ```
 
 脚本会先询问安装**客户端**还是**服务端**，然后下载对应的发行版并把 `drip` 加入
-PATH。每次下载都会与发行版公布的 SHA-256 校验值比对，不匹配则中止安装。
+PATH。每次下载都会与发行版公布的 SHA-256 校验值比对，不匹配则中止安装。交互提示从
+`/dev/tty` 读取，因此脚本经由 stdin 传入时依然可用。
+
+> 不要使用 `sudo bash <(curl ...)`。进程替换传给 `bash` 的 `/dev/fd/63` 路径只在调用
+> 它的 shell 中存在，而 `sudo` 在 exec 前会关闭继承的文件描述符，于是 root 只会看到
+> `bash: /dev/fd/63: No such file or directory`。改用管道传给 `sudo bash`，或先把脚本
+> 下载下来，都可以避免这个问题。
 
 ### 更新
 

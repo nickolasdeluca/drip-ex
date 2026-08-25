@@ -155,17 +155,20 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 		return err
 	}
 
+	secure := s.secureCookieFor(r)
+
 	// #nosec G124 -- HttpOnly and SameSite=Strict are set; Secure follows
-	// s.secureCookies, which is true whenever the panel is served over TLS. The
-	// panel is often reached on a loopback address over plain HTTP, where a
-	// hard-coded Secure would stop the cookie being stored at all.
+	// secureCookieFor, which is true whenever this particular request reached
+	// the panel over HTTPS. The panel is often reached on a loopback address
+	// over plain HTTP, where a hard-coded Secure would stop the cookie being
+	// stored at all.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
 		Expires:  expiresAt,
 		HttpOnly: true,
-		Secure:   s.secureCookies,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	// #nosec G124 -- HttpOnly is false by design: this is the readable half of
@@ -177,7 +180,7 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 		Path:     "/",
 		Expires:  expiresAt,
 		HttpOnly: false,
-		Secure:   s.secureCookies,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
 
@@ -185,7 +188,8 @@ func (s *Server) issueSession(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 // clearSessionCookies expires both cookies in the browser.
-func (s *Server) clearSessionCookies(w http.ResponseWriter) {
+func (s *Server) clearSessionCookies(w http.ResponseWriter, r *http.Request) {
+	secure := s.secureCookieFor(r)
 	for _, name := range []string{sessionCookie, csrfCookie} {
 		// #nosec G124 -- expires the pair issued above with the same attributes.
 		http.SetCookie(w, &http.Cookie{
@@ -194,10 +198,25 @@ func (s *Server) clearSessionCookies(w http.ResponseWriter) {
 			Path:     "/",
 			MaxAge:   -1,
 			HttpOnly: name == sessionCookie,
-			Secure:   s.secureCookies,
+			Secure:   secure,
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
+}
+
+// secureCookieFor decides whether the cookies this request gets carry Secure.
+//
+// The panel can be reached two ways at once: its own listener, usually plain
+// HTTP on loopback, and a public mount on the tunnel listener. A server-wide
+// answer would be wrong for one of them, so the scheme is decided per request.
+// A public mount is treated as HTTPS even when this process speaks plain HTTP,
+// because the only reason to publish the panel is to put a TLS terminator in
+// front of it.
+func (s *Server) secureCookieFor(r *http.Request) bool {
+	if s.secureCookies || r.TLS != nil {
+		return true
+	}
+	return s.publicMount && !LoopbackHost(r.Host)
 }
 
 // currentUser resolves the request's session to an operator.

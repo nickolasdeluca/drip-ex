@@ -50,6 +50,7 @@ var (
 	serverRequireAuth         bool
 	serverReservationsOnly    bool
 	serverAdminAddress        string
+	serverAdminPublic         bool
 	serverTLSMode             string
 	serverACMEEmail           string
 	serverACMEDNSProvider     string
@@ -105,6 +106,7 @@ func init() {
 	// Control plane
 	serverCmd.Flags().StringVar(&serverDBPath, "db", getEnvString("DRIP_DB_PATH", ""), "Path to the control plane SQLite database; enables client credentials and reservations (env: DRIP_DB_PATH)")
 	serverCmd.Flags().StringVar(&serverAdminAddress, "admin", getEnvString("DRIP_ADMIN_ADDRESS", ""), "Serve the admin panel on this address, e.g. 127.0.0.1:8444 (env: DRIP_ADMIN_ADDRESS)")
+	serverCmd.Flags().BoolVar(&serverAdminPublic, "admin-public", getEnvBool("DRIP_ADMIN_PUBLIC", false), "Also serve the admin panel on the server domain over the public port, in place of the landing page (env: DRIP_ADMIN_PUBLIC)")
 	serverCmd.Flags().BoolVar(&serverReservationsOnly, "reservations-only", getEnvBool("DRIP_RESERVATIONS_ONLY", false), "Reject registrations that do not bind a reservation (env: DRIP_RESERVATIONS_ONLY)")
 	serverCmd.Flags().BoolVar(&serverRequireAuth, "require-auth", getEnvBool("DRIP_REQUIRE_AUTH", false), "Reject registrations without a recognised credential (env: DRIP_REQUIRE_AUTH)")
 
@@ -266,6 +268,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		cfg.AdminAddress = serverAdminAddress
 	} else if os.Getenv("DRIP_ADMIN_ADDRESS") != "" {
 		cfg.AdminAddress = serverAdminAddress
+	}
+
+	// AdminPublic
+	if cmd.Flags().Changed("admin-public") {
+		cfg.AdminPublic = serverAdminPublic
+	} else if os.Getenv("DRIP_ADMIN_PUBLIC") != "" {
+		cfg.AdminPublic = serverAdminPublic
 	}
 
 	// ReservationsOnly
@@ -470,6 +479,38 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	listenAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 
+	// The panel is built before the HTTP handler so a public mount is in place
+	// the moment the listener accepts its first request; it starts serving on
+	// its own address further down, once the tunnel listener is up.
+	var adminServer *admin.Server
+	if cfg.AdminAddress != "" || cfg.AdminPublic {
+		var aerr error
+		adminServer, aerr = admin.New(admin.Config{
+			Store:         controlStore,
+			Manager:       tunnelManager,
+			Authenticator: authenticator,
+			Address:       cfg.AdminAddress,
+			PublicMount:   cfg.AdminPublic,
+			TLSConfig:     tlsConfig,
+			SessionTTL:    time.Duration(cfg.AdminSessionHours) * time.Hour,
+			Deployment: admin.Deployment{
+				Domain:       cfg.Domain,
+				TunnelDomain: cfg.TunnelDomain,
+				PublicPort:   cfg.PublicPort,
+				TLS:          tlsConfig != nil,
+			},
+			Logger: logger,
+		})
+		if aerr != nil {
+			logger.Fatal("Failed to configure admin panel", zap.Error(aerr))
+		}
+	}
+
+	var adminPublicHandler http.Handler
+	if adminServer != nil && cfg.AdminPublic {
+		adminPublicHandler = adminServer.PublicHandler()
+	}
+
 	httpHandler := proxy.NewHandler(proxy.HandlerConfig{
 		Manager:             tunnelManager,
 		Logger:              logger,
@@ -478,6 +519,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		AuthToken:           cfg.AuthToken,
 		MetricsToken:        cfg.MetricsToken,
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,
+		AdminHandler:        adminPublicHandler,
 	})
 	httpHandler.SetAllowedTransports(cfg.AllowedTransports)
 	httpHandler.SetAllowedTunnelTypes(cfg.AllowedTunnelTypes)
@@ -540,25 +582,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		zap.Strings("tunnel_types", cfg.AllowedTunnelTypes),
 	)
 
-	if cfg.AdminAddress != "" {
-		adminServer, aerr := admin.New(admin.Config{
-			Store:         controlStore,
-			Manager:       tunnelManager,
-			Authenticator: authenticator,
-			Address:       cfg.AdminAddress,
-			TLSConfig:     tlsConfig,
-			SessionTTL:    time.Duration(cfg.AdminSessionHours) * time.Hour,
-			Deployment: admin.Deployment{
-				Domain:       cfg.Domain,
-				TunnelDomain: cfg.TunnelDomain,
-				PublicPort:   cfg.PublicPort,
-				TLS:          tlsConfig != nil,
-			},
-			Logger: logger,
-		})
-		if aerr != nil {
-			logger.Fatal("Failed to configure admin panel", zap.Error(aerr))
-		}
+	if adminServer != nil {
 		if aerr := adminServer.Start(); aerr != nil {
 			logger.Fatal("Failed to start admin panel", zap.Error(aerr))
 		}
@@ -570,11 +594,23 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			}
 		}()
 
+		if cfg.AdminPublic {
+			logger.Info("Admin panel published on the server domain",
+				zap.String("domain", cfg.Domain),
+				zap.Int("port", cfg.PublicPort),
+			)
+		}
+
 		count, cerr := controlStore.CountAdminUsers(context.Background())
 		if cerr == nil && count == 0 {
 			logger.Warn("Admin panel has no administrator yet; the first-run setup screen is open to anyone who can reach it",
 				zap.String("address", cfg.AdminAddress),
 			)
+			if cfg.AdminPublic {
+				logger.Warn("The public mount stays closed until first-run setup is completed on the panel's own address",
+					zap.String("address", cfg.AdminAddress),
+				)
+			}
 		}
 	}
 

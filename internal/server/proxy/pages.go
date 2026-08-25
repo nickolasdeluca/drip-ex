@@ -10,6 +10,11 @@ import (
 	"drip/internal/shared/httputil"
 )
 
+// installPagePath is where the landing page moves when the admin panel takes
+// over the server domain. It stays reachable so a machine being set up can
+// still be pointed at the install command without an account.
+const installPagePath = "/install"
+
 func (h *Handler) serveHomePage(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html lang="en">
