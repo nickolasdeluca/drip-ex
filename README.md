@@ -410,6 +410,31 @@ Brazilian Portuguese ship; the language follows the browser.
 Reach it over a private network, a VPN or an SSH tunnel — exposing it publicly is
 discouraged, especially before that first-run screen has been used.
 
+### Publishing the panel
+
+A managed deployment can also serve the panel on the server domain, over the
+public HTTPS port, in place of the landing page:
+
+```bash
+drip server --db /var/lib/drip/drip.db --admin 127.0.0.1:8444 --admin-public
+```
+
+`--admin-public` is an addition, not a move: the panel keeps its own listener,
+so an operator locked out of the public mount still has a loopback way in, and
+`--admin` therefore stays required.
+
+What the published mount does *not* serve is first-run setup. It refuses every
+request until an administrator exists, and refuses `POST /api/bootstrap` for
+good, so the unauthenticated setup screen is reachable only on the panel's own
+address. Sign-in is throttled per source address and per username either way.
+
+The landing page moves to `/install`, and tunnel subdomains are untouched: only
+a request whose `Host` is exactly the server domain reaches the panel.
+
+Behind a TLS-terminating reverse proxy, note that sign-in throttling counts the
+address the connection arrives from — every client looks like the proxy, so the
+per-username half of the limit is the one doing the work.
+
 ---
 
 ## Command reference

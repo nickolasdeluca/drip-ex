@@ -54,6 +54,13 @@ type ServerConfig struct {
 	// setup screen that is unauthenticated by necessity, so it should be
 	// reached over a VPN or an SSH tunnel rather than published.
 	AdminAddress string `yaml:"admin_address,omitempty"`
+	// AdminPublic also serves the panel on the server domain, on the public
+	// HTTPS port, in place of the landing page. The panel keeps its own
+	// listener as well, so an operator locked out of the public mount still
+	// has a loopback way in. First-run setup is never served publicly: the
+	// public mount refuses every request until an administrator exists, and
+	// refuses the bootstrap endpoint for good.
+	AdminPublic bool `yaml:"admin_public,omitempty"`
 	// AdminSessionHours bounds a signed-in panel session. 0 uses 12 hours.
 	AdminSessionHours int `yaml:"admin_session_hours,omitempty"`
 	// RequireAuth rejects registrations that carry no recognised credential.
@@ -214,6 +221,20 @@ func (c *ServerConfig) Validate() error {
 
 	if c.AdminAddress != "" && c.DBPath == "" {
 		return fmt.Errorf("admin_address needs db_path to be set: the panel manages the control plane database")
+	}
+
+	if c.AdminPublic && c.DBPath == "" {
+		return fmt.Errorf("admin_public needs db_path to be set: the panel manages the control plane database")
+	}
+
+	if c.AdminPublic && c.Domain == "" {
+		return fmt.Errorf("admin_public needs domain to be set: the panel is served on the server domain")
+	}
+
+	// First-run setup is never served publicly, so a deployment that only
+	// published the panel could never create its first administrator.
+	if c.AdminPublic && c.AdminAddress == "" {
+		return fmt.Errorf("admin_public needs admin_address to be set: first-run setup is only served on the panel's own address")
 	}
 
 	if c.AdminSessionHours < 0 {

@@ -24,7 +24,8 @@ Six phases. Keep this list current as phases land.
    `*.<domain>` itself, with manual certs and reverse-proxy modes kept. *Done.*
 3. **Reservations** — pin a subdomain or TCP port to an account/client; portal
    creates the reservation, client binds it automatically at registration. *Done.*
-4. **Admin API + embedded UI** — on its own port, separate from tunnel traffic.
+4. **Admin API + embedded UI** — on its own port, separate from tunnel traffic,
+   optionally published on the server domain as well. *Done.*
 5. **Claim flow** — `active_sessions` rows, "pin this running tunnel" endpoint,
    rename-on-pin.
 6. **Windows service** — `golang.org/x/sys/windows/svc` wrapper around the
@@ -35,7 +36,10 @@ Six phases. Keep this list current as phases land.
 - **SQLite** (`modernc.org/sqlite`, CGO-free) so the single-binary story holds.
   The store is behind a struct, not an interface; introduce an interface only if
   Postgres actually arrives.
-- **Admin panel on a separate port**, never on the tunnel data path.
+- **Admin panel on a separate port**, never on the tunnel data path. It may
+  *additionally* be published on the server domain (`admin_public`), which is a
+  host-matched mount on the public listener, not a move: the panel keeps its own
+  listener, because first-run setup is served there and nowhere else.
 - **certmagic, not `x/crypto/acme/autocert`** — autocert cannot do DNS-01 and so
   cannot issue wildcards. The old `autocert.go` was dead code whose host policy
   was broken anyway (`HostWhitelist` does exact matching, so the literal
@@ -333,6 +337,17 @@ host on the old version rather than down.
 - **Reservation bandwidth participates in a `min()`.** The effective limit is
   the smallest of the server default, the reservation override and the client's
   request, so no party can raise a limit another one set. Keep it that way.
+- **The published panel must never serve first-run setup.** `admin_public`
+  mounts `admin.Server.PublicHandler`, not `Handler`: it refuses everything
+  until an administrator exists and refuses `POST /api/bootstrap` for good.
+  Both checks fail closed, a database error included. Config validation keeps
+  `admin_address` mandatory alongside it, or a deployment could never bootstrap.
+- **Session cookies decide `Secure` per request, not per server**
+  (`admin/secureCookieFor`). One `admin.Server` answers both a plain-HTTP
+  loopback listener and an HTTPS public mount, so a server-wide flag is wrong
+  for one of them. A public mount counts as HTTPS even when this process speaks
+  plain HTTP, because the only reason to publish it is a TLS terminator in
+  front.
 - **`admin`, `api`, `www` and friends are reserved subdomains**
   (`shared/utils/subdomain.go`) and cannot be claimed by clients. The admin panel
   can safely live on one of them.

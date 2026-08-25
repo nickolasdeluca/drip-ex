@@ -49,6 +49,10 @@ type HandlerConfig struct {
 	AuthToken           string
 	MetricsToken        string
 	MaxRequestBodyBytes int64
+	// AdminHandler serves the admin panel on the server domain, in place of
+	// the landing page. Nil keeps the landing page. Tunnel traffic never
+	// reaches it: only requests whose Host is exactly ServerDomain do.
+	AdminHandler http.Handler
 }
 
 type Handler struct {
@@ -60,6 +64,7 @@ type Handler struct {
 	metricsToken        string
 	publicPort          int
 	maxRequestBodyBytes int64
+	adminHandler        http.Handler
 
 	// WebSocket tunnel support
 	wsUpgrader    websocket.Upgrader
@@ -86,6 +91,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		authToken:           cfg.AuthToken,
 		metricsToken:        cfg.MetricsToken,
 		maxRequestBodyBytes: cfg.MaxRequestBodyBytes,
+		adminHandler:        cfg.AdminHandler,
 		wsUpgrader: websocket.Upgrader{
 			ReadBufferSize:  256 * 1024,
 			WriteBufferSize: 256 * 1024,
@@ -186,6 +192,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	subdomain, result := h.extractSubdomain(r.Host)
 	switch result {
 	case subdomainHome:
+		// With the panel mounted here it owns the server domain, and the
+		// landing page moves aside to /install so the install command stays
+		// reachable without an account.
+		if h.adminHandler != nil && r.URL.Path != installPagePath {
+			h.adminHandler.ServeHTTP(w, r)
+			return
+		}
 		h.serveHomePage(w, r)
 		return
 	case subdomainNotFound:

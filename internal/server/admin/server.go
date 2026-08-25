@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"drip/internal/server/auth"
@@ -30,8 +32,14 @@ type Config struct {
 	// disabled, deleted, or rotated. Optional but strongly recommended.
 	Authenticator *auth.Authenticator
 
-	// Address is the listen address, e.g. "127.0.0.1:8444".
+	// Address is the listen address, e.g. "127.0.0.1:8444". Empty builds a
+	// server with no listener of its own, for a deployment that only mounts
+	// PublicHandler on another listener.
 	Address string
+	// PublicMount reports that Handler is also served on a public hostname,
+	// which is what decides whether the session cookies a request gets carry
+	// Secure. See secureCookieFor.
+	PublicMount bool
 	// TLSConfig serves the panel over TLS when set. A loopback bind ignores it:
 	// see LoopbackAddress.
 	TLSConfig *tls.Config
@@ -69,8 +77,13 @@ type Server struct {
 	sessionTTL    time.Duration
 	deployment    Deployment
 	secureCookies bool
-	limiter       *loginLimiter
-	logger        *zap.Logger
+	publicMount   bool
+	// bootstrapped latches once an administrator exists, so the public mount
+	// stops querying the database on every request. It never unlatches:
+	// administrators cannot be deleted through the API.
+	bootstrapped atomic.Bool
+	limiter      *loginLimiter
+	logger       *zap.Logger
 
 	stopCh chan struct{}
 }
@@ -80,8 +93,8 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, fmt.Errorf("the admin panel requires the control plane database")
 	}
-	if cfg.Address == "" {
-		return nil, fmt.Errorf("admin listen address is required")
+	if cfg.Address == "" && !cfg.PublicMount {
+		return nil, fmt.Errorf("admin listen address is required unless the panel is mounted publicly")
 	}
 
 	logger := cfg.Logger
@@ -113,9 +126,14 @@ func New(cfg Config) (*Server, error) {
 		sessionTTL:    ttl,
 		deployment:    cfg.Deployment,
 		secureCookies: tlsConfig != nil,
+		publicMount:   cfg.PublicMount,
 		limiter:       newLoginLimiter(10, 15*time.Minute),
 		logger:        logger,
 		stopCh:        make(chan struct{}),
+	}
+
+	if cfg.Address == "" {
+		return s, nil
 	}
 
 	s.httpServer = &http.Server{
@@ -186,8 +204,74 @@ func (s *Server) Handler() http.Handler {
 	return securityHeaders(mux)
 }
 
-// Start begins serving. It returns once the listener is bound.
+// PublicHandler wraps Handler for a mount on a public hostname.
+//
+// First-run setup is unauthenticated by necessity, so it is never reachable
+// from the public internet: the wrapper refuses POST /api/bootstrap outright,
+// and refuses everything while the deployment still has no administrator. Both
+// checks fail closed — a database error reads as "not set up yet" — so the
+// only way to bootstrap a deployment stays the panel's own listener, which is
+// bound to loopback by default.
+func (s *Server) PublicHandler() http.Handler {
+	inner := s.Handler()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hasAdministrator(r.Context()) {
+			writeError(w, http.StatusServiceUnavailable,
+				"this panel has not been set up yet; complete first-run setup on the server's own admin address")
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/bootstrap" {
+			writeError(w, http.StatusForbidden,
+				"first-run setup is only available on the server's own admin address")
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+}
+
+// hasAdministrator reports whether the deployment has been bootstrapped. The
+// answer latches, so the database is read only until the first administrator
+// shows up.
+func (s *Server) hasAdministrator(ctx context.Context) bool {
+	if s.bootstrapped.Load() {
+		return true
+	}
+	count, err := s.store.CountAdminUsers(ctx)
+	if err != nil {
+		s.logger.Error("Failed to count admin users", zap.Error(err))
+		return false
+	}
+	if count == 0 {
+		return false
+	}
+	s.bootstrapped.Store(true)
+	return true
+}
+
+// LoopbackHost reports whether a request's Host header names the loopback
+// interface, port included or not.
+func LoopbackHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// Start begins serving on the panel's own listener. It returns once the
+// listener is bound, and does nothing when the panel was built without an
+// address of its own.
 func (s *Server) Start() error {
+	if s.httpServer == nil {
+		go s.purgeLoop()
+		return nil
+	}
+
 	ln, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.httpServer.Addr, err)
@@ -214,7 +298,7 @@ func (s *Server) Start() error {
 
 // Addr returns the bound address, or nil before Start.
 func (s *Server) Addr() net.Addr {
-	if s.listener == nil {
+	if s == nil || s.listener == nil {
 		return nil
 	}
 	return s.listener.Addr()
@@ -227,6 +311,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		return nil
 	default:
 		close(s.stopCh)
+	}
+	if s.httpServer == nil {
+		return nil
 	}
 	return s.httpServer.Shutdown(ctx)
 }
