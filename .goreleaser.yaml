@@ -13,21 +13,17 @@ builds:
       - freebsd
       - linux
       - windows
+    # No mips targets: the control plane pulls in modernc.org/sqlite, whose
+    # modernc.org/libc dependency has no mips, mipsle, mips64 or mips64le build
+    # files, so every one of those targets fails to compile.
     goarch:
       - "386"
       - arm
       - amd64
       - arm64
-      - mips
-      - mipsle
-      - mips64
-      - mips64le
     goarm:
       - "6"
       - "7"
-    gomips:
-      - hardfloat
-      - softfloat
     ignore:
       - goos: windows
         goarch: arm
