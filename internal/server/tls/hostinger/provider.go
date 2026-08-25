@@ -11,11 +11,21 @@ import (
 	"github.com/libdns/libdns"
 )
 
-// defaultTTL is applied when a record carries no usable TTL. libdns models TTL
-// as a duration and documents that sub-second values exist to avoid a
-// provider's default; the API takes whole seconds, so anything under one second
-// lands here.
-const defaultTTL = 300
+// minTTL is the shortest TTL the API accepts. Anything lower is rejected with
+// "Valor TTL deve estar entre 60 e 86400", so requests below it are clamped up
+// rather than failed.
+//
+// It doubles as the default. certmagic asks for a TTL of 0, which libdns
+// defines as "do not cache" — exactly right for a challenge record that lives
+// for seconds. Substituting a comfortable-looking default instead of the
+// smallest value the API allows is what broke wildcard issuance: the apex and
+// the wildcard solve DNS-01 at the same name in separate, sequential orders,
+// so a long TTL leaves the CA's resolver holding the first order's token when
+// it validates the second.
+const minTTL = 60
+
+// maxTTL is the largest value the API accepts.
+const maxTTL = 86400
 
 // Provider talks to the Hostinger DNS API on behalf of libdns.
 //
@@ -245,12 +255,12 @@ func groupRecords(zone string, recs []libdns.Record) ([]zoneEntry, error) {
 			return nil, fmt.Errorf("the %s %s record has no value", name, rrtype)
 		}
 
-		ttl := int(rr.TTL.Seconds())
+		ttl := clampTTL(int(rr.TTL.Seconds()))
 
 		k := key{name: name, rrtype: rrtype}
 		if at, ok := index[k]; ok {
 			entries[at].Records = append(entries[at].Records, zoneContent{Content: rr.Data})
-			if ttl > 0 && (entries[at].TTL <= 0 || ttl < entries[at].TTL) {
+			if ttl < entries[at].TTL {
 				entries[at].TTL = ttl
 			}
 			continue
@@ -265,12 +275,19 @@ func groupRecords(zone string, recs []libdns.Record) ([]zoneEntry, error) {
 		})
 	}
 
-	for i := range entries {
-		if entries[i].TTL <= 0 {
-			entries[i].TTL = defaultTTL
-		}
-	}
 	return entries, nil
+}
+
+// clampTTL keeps a requested TTL inside the range the API accepts. A zero or
+// negative request means "as short as possible", which is minTTL here.
+func clampTTL(seconds int) int {
+	if seconds < minTTL {
+		return minTTL
+	}
+	if seconds > maxTTL {
+		return maxTTL
+	}
+	return seconds
 }
 
 // normalizeName renders a record name the way the API stores it: relative to

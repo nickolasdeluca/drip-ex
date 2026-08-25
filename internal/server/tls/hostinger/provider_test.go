@@ -136,7 +136,10 @@ func TestAppendRecordsGroupsValuesIntoOneRRset(t *testing.T) {
 	}
 }
 
-func TestAppendRecordsAppliesADefaultTTL(t *testing.T) {
+// certmagic asks for a TTL of 0, meaning "do not cache". The API rejects
+// anything below 60, so the shortest it will take is what a challenge record
+// gets — never a longer, friendlier-looking default.
+func TestAppendRecordsClampsATTLOfZeroToTheAPIMinimum(t *testing.T) {
 	api := &fakeAPI{t: t}
 	provider := newProvider(t, api)
 
@@ -147,11 +150,50 @@ func TestAppendRecordsAppliesADefaultTTL(t *testing.T) {
 	}
 
 	req := decodeUpdate(t, api.calls[0].body)
-	if req.Zone[0].TTL != defaultTTL {
-		t.Errorf("ttl = %d, want the %d default", req.Zone[0].TTL, defaultTTL)
+	if req.Zone[0].TTL != minTTL {
+		t.Errorf("ttl = %d, want the %d minimum", req.Zone[0].TTL, minTTL)
 	}
 	if req.Zone[0].Name != "@" {
 		t.Errorf("name = %q, want the apex marker @", req.Zone[0].Name)
+	}
+}
+
+func TestClampTTL(t *testing.T) {
+	t.Parallel()
+
+	tests := map[int]int{
+		0:      minTTL,
+		-1:     minTTL,
+		1:      minTTL,
+		59:     minTTL,
+		60:     60,
+		300:    300,
+		86400:  maxTTL,
+		200000: maxTTL,
+	}
+
+	for in, want := range tests {
+		if got := clampTTL(in); got != want {
+			t.Errorf("clampTTL(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestAppendRecordsKeepsTheShortestTTLInAGroup(t *testing.T) {
+	api := &fakeAPI{t: t}
+	provider := newProvider(t, api)
+
+	_, err := provider.AppendRecords(context.Background(), "example.com.", []libdns.Record{
+		libdns.TXT{Name: "www", TTL: 600 * time.Second, Text: "a"},
+		libdns.TXT{Name: "www", TTL: 120 * time.Second, Text: "b"},
+	})
+	if err != nil {
+		t.Fatalf("AppendRecords() error = %v", err)
+	}
+
+	req := decodeUpdate(t, api.calls[0].body)
+	if req.Zone[0].TTL != 120 {
+		t.Errorf("ttl = %d, want the shortest of the group", req.Zone[0].TTL)
 	}
 }
 

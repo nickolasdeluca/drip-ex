@@ -296,6 +296,12 @@ past the certificate lifetime, or renewals start failing with HTTP 401 months
 after setup. Adding another provider is one import plus one entry in
 `internal/server/tls/dns.go`.
 
+Issuance takes a few minutes on Hostinger. The domain and the wildcard are
+separate certificates whose DNS-01 challenges share one `_acme-challenge` name,
+and Hostinger refuses a record TTL below 60 seconds, so the server waits out the
+CA's cached answer between the two rather than have the second validation read
+the first token. `acme.propagation_delay_seconds` tunes that wait.
+
 ### Docker
 
 No container image is published — Docker is unsupported for now — but the

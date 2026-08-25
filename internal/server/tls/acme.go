@@ -52,6 +52,9 @@ type ACMEConfig struct {
 	// PropagationTimeout bounds the wait for the challenge TXT record to become
 	// visible. Zero uses the certmagic default of two minutes.
 	PropagationTimeout time.Duration
+	// PropagationDelay waits before the first visibility check. Zero falls back
+	// to the delay the DNS provider needs; see DefaultPropagationDelay.
+	PropagationDelay time.Duration
 	// Resolvers optionally pins the DNS servers used for propagation checks.
 	// Useful when the host's resolver serves stale or split-horizon answers.
 	Resolvers []string
@@ -118,9 +121,18 @@ func NewACME(ctx context.Context, cfg ACMEConfig) (*ACMEManager, error) {
 		return nil, fmt.Errorf("failed to create certificate cache directory: %w", err)
 	}
 
+	// An unset delay takes the provider's own, which is not always zero: a
+	// provider with a TTL floor needs the CA's cached answer for the previous
+	// order to expire before the next validation reads the same name.
+	propagationDelay := cfg.PropagationDelay
+	if propagationDelay == 0 {
+		propagationDelay = DefaultPropagationDelay(cfg.DNS.Name)
+	}
+
 	solver := &certmagic.DNS01Solver{
 		DNSManager: certmagic.DNSManager{
 			DNSProvider:        provider,
+			PropagationDelay:   propagationDelay,
 			PropagationTimeout: cfg.PropagationTimeout,
 			Resolvers:          cfg.Resolvers,
 			Logger:             logger,
@@ -160,6 +172,7 @@ func NewACME(ctx context.Context, cfg ACMEConfig) (*ACMEManager, error) {
 		zap.Strings("names", names),
 		zap.String("ca", resolveCA(cfg.CA)),
 		zap.String("dns_provider", cfg.DNS.Name),
+		zap.Duration("propagation_delay", propagationDelay),
 		zap.String("cache_dir", cacheDir),
 	)
 

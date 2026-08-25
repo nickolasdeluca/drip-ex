@@ -398,6 +398,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			CA:                 cfg.ACME.CA,
 			CacheDir:           cfg.ACME.CacheDir,
 			PropagationTimeout: time.Duration(cfg.ACME.PropagationTimeoutSeconds) * time.Second,
+			PropagationDelay:   time.Duration(cfg.ACME.PropagationDelaySeconds) * time.Second,
 			Resolvers:          cfg.ACME.Resolvers,
 			DNS: servertls.DNSProviderConfig{
 				Name:     cfg.ACME.DNSProvider,

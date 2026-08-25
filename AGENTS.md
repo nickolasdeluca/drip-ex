@@ -204,6 +204,17 @@ survivors of a partial delete, which would otherwise be stored doubly quoted.
 Without it `DeleteRecords` matched nothing and returned no error, so ACME
 challenge records accumulated until Let's Encrypt refused the authorization.
 
+**Challenge records take the shortest TTL the API allows, never a friendlier
+default.** Hostinger refuses anything below 60 seconds, and certmagic asks for
+0 — libdns for "do not cache". The server obtains one certificate per name
+(`generateCSR` in certmagic takes a single name, so there is no SAN grouping to
+reach for), which means the domain and the wildcard solve DNS-01 at the same
+`_acme-challenge` name in separate, sequential orders. The CA caches the first
+order's answer for the record's TTL, so the second validation reads the first
+token unless the two are separated by longer than that. `dnsProviderEntry`
+carries a per-provider `propagationDelay` for exactly that gap: 90s for
+Hostinger, none for Cloudflare. `acme.propagation_delay_seconds` overrides it.
+
 All three modes build on `baseTLSConfig()`: TLS 1.3 only, three cipher suites,
 no ALPN advertisement. ACME mode deliberately layers certmagic's
 `GetCertificate` onto that base rather than using certmagic's own `TLSConfig()`,

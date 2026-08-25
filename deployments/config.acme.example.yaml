@@ -52,6 +52,15 @@ acme:
   # Wait longer for slow DNS propagation. 0 uses the two-minute default.
   # propagation_timeout_seconds: 300
 
+  # Wait this long after writing a challenge record before checking for it.
+  # 0 uses the delay the provider needs, which is 90s for hostinger and 0 for
+  # cloudflare. The delay is not padding: the domain and the wildcard solve
+  # DNS-01 at the same _acme-challenge name in separate, sequential orders, and
+  # the CA caches the first order's answer for the record's TTL. Hostinger
+  # refuses a TTL below 60s, so without a longer gap the CA checks the second
+  # token against the first and rejects it.
+  # propagation_delay_seconds: 90
+
 # Control plane: per-client credentials and, later, tunnel reservations.
 db_path: /var/lib/drip/control.db
 require_auth: true

@@ -255,3 +255,25 @@ func TestACMEAndManualShareTLSPosture(t *testing.T) {
 		t.Fatal("acme GetCertificate is nil")
 	}
 }
+
+// The domain and the wildcard solve DNS-01 at the same _acme-challenge name in
+// separate, sequential orders. Hostinger refuses a TTL below 60 seconds, so the
+// CA still holds the first order's answer when it validates the second unless
+// the two are separated by more than that TTL.
+func TestDefaultPropagationDelay(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultPropagationDelay("hostinger"); got <= 60*time.Second {
+		t.Errorf("DefaultPropagationDelay(hostinger) = %s, want more than the 60s TTL floor", got)
+	}
+	if got := DefaultPropagationDelay(" HOSTINGER "); got <= 60*time.Second {
+		t.Errorf("DefaultPropagationDelay() ignored casing and spacing, got %s", got)
+	}
+	// Cloudflare honours a short TTL, so it needs no delay.
+	if got := DefaultPropagationDelay("cloudflare"); got != 0 {
+		t.Errorf("DefaultPropagationDelay(cloudflare) = %s, want 0", got)
+	}
+	if got := DefaultPropagationDelay("route53"); got != 0 {
+		t.Errorf("DefaultPropagationDelay() for an unknown provider = %s, want 0", got)
+	}
+}
