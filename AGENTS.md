@@ -244,6 +244,19 @@ a change to the client only reaches users after a tagged release.
 is called — `install-client.sh` builds that file name literally, and the
 PowerShell installer matches on the platform and architecture within it.
 
+All four verify the SHA-256 from `drip_<version>_checksums.txt` before installing
+and **fail closed**: a missing checksum file, an archive the file does not list,
+or a mismatch aborts. Keep it that way — these scripts run as root off a piped
+URL. Downloads land in a `mktemp -d` scratch directory removed by an `EXIT` trap,
+not in fixed `/tmp` paths.
+
+Both bash installers already handle updates: `check_existing_install` compares
+the installed binary against the latest release, prompts, and returns through the
+`IS_UPDATE` branch of `main()`, which never touches the configuration.
+`install-server.sh` copies the outgoing binary to `drip.previous` first and calls
+`rollback_binary` when the new one will not start, so a bad release leaves the
+host on the old version rather than down.
+
 ## CI and publishing
 
 | Workflow | Trigger | Produces |
