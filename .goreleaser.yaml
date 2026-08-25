@@ -1,5 +1,9 @@
 version: 2
 
+# Pinned so release assets stay drip_<version>_<os>_<arch>.tar.gz regardless of
+# the repository or checkout directory name. The installers match on that name.
+project_name: drip
+
 builds:
   - env:
       - CGO_ENABLED=0
