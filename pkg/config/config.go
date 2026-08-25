@@ -107,6 +107,11 @@ type ACMEConfig struct {
 	// PropagationTimeoutSeconds bounds the wait for the challenge TXT record to
 	// become visible. 0 uses the two-minute default.
 	PropagationTimeoutSeconds int `yaml:"propagation_timeout_seconds,omitempty"`
+	// PropagationDelaySeconds waits before the first visibility check. 0 uses
+	// the delay the DNS provider needs, which is not always zero: a provider
+	// with a TTL floor needs the CA's cached answer for the previous order to
+	// expire before the next validation reads the same challenge name.
+	PropagationDelaySeconds int `yaml:"propagation_delay_seconds,omitempty"`
 	// Resolvers optionally pins the DNS servers used for propagation checks,
 	// for hosts whose resolver serves stale or split-horizon answers.
 	Resolvers []string `yaml:"resolvers,omitempty"`

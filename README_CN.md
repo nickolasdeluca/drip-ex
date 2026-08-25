@@ -283,6 +283,11 @@ Hostinger 的 token 在创建时会指定过期日期。请选择远晚于证书
 续期会以 HTTP 401 失败。新增其他服务商只需一个 import 加上
 `internal/server/tls/dns.go` 中的一条注册项。
 
+在 Hostinger 上签发需要几分钟。主域名和通配符是两张独立证书，它们的 DNS-01 挑战共用
+同一个 `_acme-challenge` 名称，而 Hostinger 不接受低于 60 秒的记录 TTL，因此服务端会
+在两次签发之间等待 CA 的缓存过期，否则第二次校验会读到第一次的 token。可用
+`acme.propagation_delay_seconds` 调整该等待。
+
 ### Docker
 
 目前不发布容器镜像，Docker 暂不受支持，但 Dockerfile 和 compose 文件都在仓库里，
