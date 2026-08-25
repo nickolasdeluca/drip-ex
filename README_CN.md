@@ -60,8 +60,23 @@ burst_multiplier: 2.5
 
 ### 安装
 
+Linux 和 macOS：
+
 ```bash
-bash <(curl -sL https://driptunnel.app/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh)
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install-client.ps1 | iex
+```
+
+需要传参数（指定版本、安装目录，或顺便注册 Windows 服务）时，先下载脚本：
+
+```powershell
+irm https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install-client.ps1 -OutFile install-client.ps1
+.\install-client.ps1 -InstallService -AllTunnels
 ```
 
 ### 基本使用

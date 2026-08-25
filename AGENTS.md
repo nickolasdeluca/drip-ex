@@ -218,6 +218,23 @@ cross-platform.
   that as fatal would leave a service permanently down over its own stale session.
 - **Logging goes through `utils.InitFileLogger`, not `zap.Config.OutputPaths`.**
   zap parses output paths as URLs and rejects `C:\...` as an unknown scheme.
+- **`scripts/install-client.ps1` is the Windows installer**; the bash installers
+  cannot register a service and only run under Git Bash or MSYS. It can install
+  the service in the same pass (`-InstallService`), and it stops a running
+  service before replacing the binary, because Windows will not let an open
+  executable be overwritten.
+
+## Installers
+
+`scripts/install.sh` (wrapper), `install-client.sh`, `install-server.sh` and
+`install-client.ps1` all default to **this fork**, `nickolasdeluca/drip-ex`,
+overridable with `GITHUB_REPO=` or `-Repo`. They install from GitHub Releases, so
+a change to the client only reaches users after a tagged release.
+
+`.goreleaser.yaml` pins `project_name: drip` so assets stay
+`drip_<version>_<os>_<arch>.tar.gz` whatever the repository or checkout directory
+is called — `install-client.sh` builds that file name literally, and the
+PowerShell installer matches on the platform and architecture within it.
 
 ## Traps
 

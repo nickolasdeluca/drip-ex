@@ -60,8 +60,24 @@ burst_multiplier: 2.5
 
 ### Install
 
+Linux and macOS:
+
 ```bash
-bash <(curl -sL https://driptunnel.app/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install.sh)
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install-client.ps1 | iex
+```
+
+To pass options — a specific version, an install directory, or registering the
+service in one go — download the script first:
+
+```powershell
+irm https://raw.githubusercontent.com/nickolasdeluca/drip-ex/main/scripts/install-client.ps1 -OutFile install-client.ps1
+.\install-client.ps1 -InstallService -AllTunnels
 ```
 
 ### Basic Usage
@@ -89,6 +105,9 @@ drip service install --all          # or: --tunnel web --tunnel api
 drip service start
 drip service status
 ```
+
+`install-client.ps1 -InstallService -AllTunnels` does all of that during
+installation, and `install-client.ps1 -Uninstall` reverses it.
 
 `service install` copies your configuration to `%ProgramData%\drip\config.yaml`
 and restricts it to SYSTEM and Administrators — a service runs as LocalSystem and
