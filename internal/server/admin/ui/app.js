@@ -25,7 +25,7 @@ async function api(method, path, body) {
   if (text) { try { data = JSON.parse(text); } catch (_) { data = null; } }
 
   if (!res.ok) {
-    const err = new Error((data && data.error) || res.statusText || 'request failed');
+    const err = new Error(serverError((data && data.error) || res.statusText || t('common.requestFailed')));
     err.status = res.status;
     throw err;
   }
@@ -77,9 +77,9 @@ function bytes(n) {
 }
 
 function when(value) {
-  if (!value) return 'never';
+  if (!value) return t('common.never');
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? 'never' : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? t('common.never') : d.toLocaleString(currentLang());
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -95,12 +95,13 @@ const state = {
   reservations: [],
   linked: new Set(),   // subdomains lit at last render, for the energize moment
   seenLink: false,
+  needsSetup: false,
 };
 
 function accountOf(id) { return state.accounts.find(a => a.id === id) || null; }
-function accountLabel(id) { const a = accountOf(id); return a ? a.name : (id || '—'); }
+function accountLabel(id) { const a = accountOf(id); return a ? a.name : (id || t('common.none')); }
 function clientLabel(id) {
-  if (!id) return 'any client on the account';
+  if (!id) return t('common.anyClient');
   const c = state.clients.find(x => x.id === id);
   return c ? c.name : id;
 }
@@ -169,14 +170,14 @@ function reservationFor(clientId) {
 
 // copyable renders a monospace strip with a copy button beside it.
 function copyable(value, label) {
-  const button = el('button', { type: 'button', class: 'btn-quiet small', text: 'Copy' });
+  const button = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.copy') });
   button.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(value);
-      button.textContent = 'Copied';
-      setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+      button.textContent = t('common.copied');
+      setTimeout(() => { button.textContent = t('common.copy'); }, 1600);
     } catch (_) {
-      status('Could not reach the clipboard. Select the text and copy it manually.', true);
+      status(t('common.copyFailed'), true);
     }
   });
   return el('div', { class: 'copyable' }, [
@@ -238,7 +239,7 @@ function danger(label, confirmText, run) {
     // Replace the whole action group, not just this button: a confirmation
     // squeezed in beside the others overflows the column.
     const group = button.closest('.btn-row') || button;
-    const cancel = el('button', { type: 'button', class: 'btn-quiet small', text: 'Keep' });
+    const cancel = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.keep') });
     const go = el('button', { type: 'button', class: 'btn-danger small', text: label });
     const strip = el('span', { class: 'confirm' }, [
       el('span', { text: confirmText }), cancel, go,
@@ -249,7 +250,7 @@ function danger(label, confirmText, run) {
     go.addEventListener('click', async () => {
       go.disabled = true;
       cancel.disabled = true;
-      go.textContent = 'Working';
+      go.textContent = t('common.working');
       try { await run(); } catch (err) { status(err.message, true); restore(); }
     });
 
@@ -269,23 +270,23 @@ function accountField(name) {
   }
   const sel = el('select', { name });
   for (const a of state.accounts) sel.appendChild(el('option', { value: a.id, text: a.name }));
-  return labelled('Account', sel);
+  return labelled(t('col.account'), sel);
 }
 
 // hasAccount reports whether any account exists to attach things to.
 function hasAccount() { return state.accounts.length > 0; }
 
 // needsAccountFirst is the blank state shown when nothing can be created yet.
-function needsAccountFirst(what) {
+function needsAccountFirst(kind) {
   return el('div', { class: 'blank' }, [
-    el('span', { class: 'legend', text: 'No account yet' }),
-    el('p', { class: 'note', text: `Every ${what} belongs to an account. Add one under Accounts first.` }),
+    el('span', { class: 'legend', text: t('common.noAccountYet') }),
+    el('p', { class: 'note', text: t('common.noAccountHint' + kind) }),
   ]);
 }
 
 function clientSelect(name) {
   const sel = el('select', { name });
-  sel.appendChild(el('option', { value: '', text: 'any machine on the account' }));
+  sel.appendChild(el('option', { value: '', text: t('common.anyMachine') }));
   for (const c of state.clients) sel.appendChild(el('option', { value: c.id, text: c.name }));
   return sel;
 }
@@ -293,7 +294,7 @@ function clientSelect(name) {
 function submitting(form, on) {
   for (const control of form.elements) control.disabled = on;
   const button = form.querySelector('button[type=submit]');
-  if (button) button.textContent = on ? 'Working' : button.dataset.label;
+  if (button) button.textContent = on ? t('common.working') : button.dataset.label;
 }
 
 function bench(fields, submitLabel, handler) {
@@ -366,25 +367,22 @@ async function viewField(root) {
   const linkedCount = linkedNow.size;
   const darkCount = ports.filter(p => p.allocated && !p.tunnel).length;
 
-  root.appendChild(head(
-    'Field',
-    'Every allocation is a port. A lit indicator means a client is connected to it right now.',
-  ));
+  root.appendChild(head(t('field.title'), t('field.note')));
 
   const rail = [
     el('div', { class: 'counts' }, [
       el('span', { class: 'count linked' }, [
-        el('b', { text: String(linkedCount) }), el('span', { class: 'legend', text: 'linked' }),
+        el('b', { text: String(linkedCount) }), el('span', { class: 'legend', text: t('field.linked') }),
       ]),
       el('span', { class: 'count' }, [
-        el('b', { text: String(darkCount) }), el('span', { class: 'legend', text: 'allocated, dark' }),
+        el('b', { text: String(darkCount) }), el('span', { class: 'legend', text: t('field.dark') }),
       ]),
       el('span', { class: 'count' }, [
-        el('b', { text: String(ports.length) }), el('span', { class: 'legend', text: 'ports' }),
+        el('b', { text: String(ports.length) }), el('span', { class: 'legend', text: t('field.ports') }),
       ]),
     ]),
     el('button', {
-      type: 'button', class: 'btn-quiet small', text: 'Re-read',
+      type: 'button', class: 'btn-quiet small', text: t('field.reread'),
       onclick: () => render(),
     }),
   ];
@@ -392,11 +390,8 @@ async function viewField(root) {
   if (!ports.length) {
     root.appendChild(panel(rail, [
       el('div', { class: 'blank' }, [
-        el('span', { class: 'legend', text: 'Panel empty' }),
-        el('p', {
-          class: 'note',
-          text: 'No allocations and nothing connected. Create an account, issue a credential, then reserve a name for it — the reserved name is what the client binds to on every reconnect.',
-        }),
+        el('span', { class: 'legend', text: t('field.empty') }),
+        el('p', { class: 'note', text: t('field.emptyHint') }),
       ]),
     ]));
     return;
@@ -414,8 +409,10 @@ async function viewField(root) {
 
     const stripClass = p.allocated ? 'port-strip' : 'port-strip unlabelled';
     const detail = linked
-      ? `${p.tunnel.active_connections} conn · ${bytes(p.tunnel.bytes_in + p.tunnel.bytes_out)}`
-      : (p.allocated ? (p.enabled ? 'dark' : 'disabled') : 'unlabelled');
+      ? `${p.tunnel.active_connections} ${t('field.conn')} · ${bytes(p.tunnel.bytes_in + p.tunnel.bytes_out)}`
+      : (p.allocated
+        ? (p.enabled ? t('field.stateDark') : t('field.stateDisabled'))
+        : t('field.stateUnlabelled'));
 
     grid.appendChild(el('div', {
       class: cls,
@@ -464,7 +461,7 @@ async function viewField(root) {
         el('span', { class: 'mono', text: p.label }),
       ])]) },
       { value: el('td', { text: p.tunnel.tunnel_type }) },
-      { value: el('td', { text: p.clientId ? clientLabel(p.clientId) : 'unauthenticated' }) },
+      { value: el('td', { text: p.clientId ? clientLabel(p.clientId) : t('field.unauthenticated') }) },
       { value: el('td', { text: accountLabel(p.accountId) }), when: multiTenant() },
       { value: el('td', { class: 'right', text: String(p.tunnel.active_connections) }) },
       { value: el('td', { class: 'right', text: bytes(p.tunnel.bytes_in) }) },
@@ -473,15 +470,15 @@ async function viewField(root) {
     ])));
 
     root.appendChild(panel(
-      [el('span', { class: 'legend', text: 'Linked detail' })],
+      [el('span', { class: 'legend', text: t('field.detail') })],
       [dataTable(
         cols([
-          { value: 'Port' }, { value: 'Type' }, { value: 'Machine' },
-          { value: 'Account', when: multiTenant() },
-          { value: { label: 'Conns', right: true } },
-          { value: { label: 'In', right: true } },
-          { value: { label: 'Out', right: true } },
-          { value: 'Last active' },
+          { value: t('col.port') }, { value: t('col.type') }, { value: t('col.machine') },
+          { value: t('col.account'), when: multiTenant() },
+          { value: { label: t('col.conns'), right: true } },
+          { value: { label: t('col.in'), right: true } },
+          { value: { label: t('col.out'), right: true } },
+          { value: t('col.lastActive') },
         ]),
         rows, '', '',
       )],
@@ -492,7 +489,7 @@ async function viewField(root) {
   if (multiTenant()) {
     root.appendChild(panel(
       [
-        el('span', { class: 'legend', text: 'Tag legend' }),
+        el('span', { class: 'legend', text: t('field.tagLegend') }),
         el('div', { class: 'counts legend-row' }, state.accounts.map(a =>
           el('span', { class: 'count' }, [
             el('i', { class: tagClass(a.id) }),
@@ -509,23 +506,20 @@ async function viewField(root) {
 async function viewReservations(root) {
   const list = state.reservations;
 
-  root.appendChild(head(
-    'Allocations',
-    'A reserved subdomain or TCP port. Bind it to a machine and that machine lands on the same URL every time it reconnects; leave it unbound and any machine may claim it by asking for the name.',
-  ));
+  root.appendChild(head(t('alloc.title'), t('alloc.note')));
 
   if (canEdit() && !hasAccount()) {
-    root.appendChild(panel(null, [needsAccountFirst('allocation')]));
+    root.appendChild(panel(null, [needsAccountFirst('Allocation')]));
   } else if (canEdit()) {
     root.appendChild(panel(
-      [el('span', { class: 'legend', text: 'Reserve a port' })],
+      [el('span', { class: 'legend', text: t('alloc.reserveHead') })],
       [bench([
         accountField('account_id'),
-        labelled('Machine', clientSelect('client_id')),
-        labelled('Subdomain', el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' }), true),
-        labelled('or TCP port', el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' })),
-        labelled('Bandwidth', el('input', { name: 'bandwidth', placeholder: '1M' })),
-      ], 'Reserve', async (data) => {
+        labelled(t('col.machine'), clientSelect('client_id')),
+        labelled(t('alloc.subdomain'), el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' }), true),
+        labelled(t('alloc.tcpPort'), el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' })),
+        labelled(t('col.bandwidth'), el('input', { name: 'bandwidth', placeholder: '1M' })),
+      ], t('alloc.submit'), async (data) => {
         const port = parseInt(data.get('tcp_port'), 10);
         await api('POST', '/api/reservations', {
           account_id: data.get('account_id'),
@@ -534,7 +528,7 @@ async function viewReservations(root) {
           tcp_port: Number.isNaN(port) ? 0 : port,
           bandwidth: (data.get('bandwidth') || '').trim(),
         });
-        status('Port reserved.');
+        status(t('alloc.reserved'));
       })],
     ));
   }
@@ -547,11 +541,13 @@ async function viewReservations(root) {
     { value: el('td', { text: r.tunnel_type }) },
     { value: el('td', { text: accountLabel(r.account_id) }), when: multiTenant() },
     { value: el('td', { text: clientLabel(r.client_id) }) },
-    { value: el('td', { text: r.bandwidth || '—' }) },
-    { value: el('td', null, [r.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]) },
+    { value: el('td', { text: r.bandwidth || t('common.none') }) },
+    { value: el('td', null, [r.enabled
+      ? stateCell('on', t('common.enabled'))
+      : stateCell('held', t('common.disabled'))]) },
     { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
       el('button', {
-        type: 'button', class: 'btn-quiet small', text: r.enabled ? 'Disable' : 'Enable',
+        type: 'button', class: 'btn-quiet small', text: r.enabled ? t('common.disable') : t('common.enable'),
         onclick: async (e) => {
           e.target.disabled = true;
           try {
@@ -560,26 +556,26 @@ async function viewReservations(root) {
           } catch (err) { status(err.message, true); e.target.disabled = false; }
         },
       }),
-      danger('Release', 'Release this name?', async () => {
+      danger(t('alloc.release'), t('alloc.releaseConfirm'), async () => {
         await api('DELETE', `/api/reservations/${r.id}`);
-        status('Allocation released.');
+        status(t('alloc.released'));
         await render();
       }),
     ]) : null]) },
   ])));
 
   root.appendChild(panel(
-    [el('span', { class: 'legend', text: `${list.length} allocated` })],
+    [el('span', { class: 'legend', text: t('alloc.count', { n: list.length }) })],
     [dataTable(
       cols([
-        { value: 'Port' }, { value: 'Type' },
-        { value: 'Account', when: multiTenant() },
-        { value: 'Machine' }, { value: 'Bandwidth' }, { value: 'State' },
+        { value: t('col.port') }, { value: t('col.type') },
+        { value: t('col.account'), when: multiTenant() },
+        { value: t('col.machine') }, { value: t('col.bandwidth') }, { value: t('col.state') },
         { value: { label: '', right: true } },
       ]),
       rows,
-      'Nothing allocated',
-      'Reserve a subdomain and every reconnect from that client lands on the same URL.',
+      t('alloc.empty'),
+      t('alloc.emptyHint'),
     )],
   ));
 }
@@ -587,21 +583,18 @@ async function viewReservations(root) {
 // ---- credentials ---------------------------------------------------------
 
 async function viewClients(root) {
-  root.appendChild(head(
-    'Credentials',
-    'One credential per machine. The machine presents it to connect; the token is shown once, when it is issued or rotated.',
-  ));
+  root.appendChild(head(t('client.title'), t('client.note')));
 
   if (canEdit() && !hasAccount()) {
-    root.appendChild(panel(null, [needsAccountFirst('credential')]));
+    root.appendChild(panel(null, [needsAccountFirst('Credential')]));
   } else if (canEdit()) {
     root.appendChild(panel(
-      [el('span', { class: 'legend', text: 'Issue a credential' })],
+      [el('span', { class: 'legend', text: t('client.issueHead') })],
       [bench([
         accountField('account_id'),
-        labelled('Machine name', el('input', { name: 'name', placeholder: 'win-svc-01', required: true, autocapitalize: 'off', spellcheck: 'false' }), true),
-        labelled('Bandwidth', el('input', { name: 'bandwidth', placeholder: '1M' })),
-      ], 'Issue', async (data) => {
+        labelled(t('client.name'), el('input', { name: 'name', placeholder: 'win-svc-01', required: true, autocapitalize: 'off', spellcheck: 'false' }), true),
+        labelled(t('col.bandwidth'), el('input', { name: 'bandwidth', placeholder: '1M' })),
+      ], t('client.submit'), async (data) => {
         const created = await api('POST', '/api/clients', {
           account_id: data.get('account_id'),
           name: (data.get('name') || '').trim(),
@@ -621,15 +614,17 @@ async function viewClients(root) {
       const reservation = reservationFor(c.id);
       return reservation
         ? el('span', { class: 'mono', text: allocationURL(reservation) })
-        : el('span', { class: 'legend', text: 'random name each connect' });
+        : el('span', { class: 'legend', text: t('client.randomName') });
     })()]) },
     { value: el('td', { text: accountLabel(c.account_id) }), when: multiTenant() },
-    { value: el('td', { text: c.bandwidth || '—' }) },
+    { value: el('td', { text: c.bandwidth || t('common.none') }) },
     { value: el('td', { text: when(c.last_seen_at) }) },
-    { value: el('td', null, [c.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]) },
+    { value: el('td', null, [c.enabled
+      ? stateCell('on', t('common.enabled'))
+      : stateCell('held', t('common.disabled'))]) },
     { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
       el('button', {
-        type: 'button', class: 'btn-quiet small', text: c.enabled ? 'Disable' : 'Enable',
+        type: 'button', class: 'btn-quiet small', text: c.enabled ? t('common.disable') : t('common.enable'),
         onclick: async (e) => {
           e.target.disabled = true;
           try {
@@ -638,31 +633,31 @@ async function viewClients(root) {
           } catch (err) { status(err.message, true); e.target.disabled = false; }
         },
       }),
-      danger('Rotate', 'Rotate? The old token dies now.', async () => {
+      danger(t('client.rotate'), t('client.rotateConfirm'), async () => {
         const out = await api('POST', `/api/clients/${c.id}/rotate`);
         showToken(out.token, c);
         await render();
       }),
-      danger('Delete', 'Delete? Allocations become unbound.', async () => {
+      danger(t('common.delete'), t('client.deleteConfirm'), async () => {
         await api('DELETE', `/api/clients/${c.id}`);
-        status('Credential deleted.');
+        status(t('client.deleted'));
         await render();
       }),
     ]) : null]) },
   ])));
 
   root.appendChild(panel(
-    [el('span', { class: 'legend', text: `${state.clients.length} issued` })],
+    [el('span', { class: 'legend', text: t('client.count', { n: state.clients.length }) })],
     [dataTable(
       cols([
-        { value: 'Machine' }, { value: 'Address' },
-        { value: 'Account', when: multiTenant() },
-        { value: 'Bandwidth' }, { value: 'Last seen' }, { value: 'State' },
+        { value: t('col.machine') }, { value: t('col.address') },
+        { value: t('col.account'), when: multiTenant() },
+        { value: t('col.bandwidth') }, { value: t('col.lastSeen') }, { value: t('col.state') },
         { value: { label: '', right: true } },
       ]),
       rows,
-      'No credentials issued',
-      'A credential is what a machine presents to connect. Issue one per machine, then reserve a port for it.',
+      t('client.empty'),
+      t('client.emptyHint'),
     )],
   ));
 }
@@ -670,23 +665,20 @@ async function viewClients(root) {
 // ---- accounts ------------------------------------------------------------
 
 async function viewAccounts(root) {
-  root.appendChild(head(
-    'Accounts',
-    'An account groups the machines and names belonging to one tenant, and caps how many tunnels they may open at once. Running this server for yourself? Keep the single default account and ignore this page — you only need more when separate customers or teams share the deployment.',
-  ));
+  root.appendChild(head(t('account.title'), t('account.note')));
 
   if (canEdit()) {
     root.appendChild(panel(
-      [el('span', { class: 'legend', text: 'Add an account' })],
+      [el('span', { class: 'legend', text: t('account.addHead') })],
       [bench([
-        labelled('Name', el('input', { name: 'name', placeholder: 'acme', required: true, autocapitalize: 'off' }), true),
-        labelled('Tunnel ceiling (0 = none)', el('input', { name: 'max_tunnels', type: 'number', min: '0', value: '0' })),
-      ], 'Add', async (data) => {
+        labelled(t('account.name'), el('input', { name: 'name', placeholder: 'acme', required: true, autocapitalize: 'off' }), true),
+        labelled(t('account.ceiling'), el('input', { name: 'max_tunnels', type: 'number', min: '0', value: '0' })),
+      ], t('account.submit'), async (data) => {
         await api('POST', '/api/accounts', {
           name: (data.get('name') || '').trim(),
           max_tunnels: parseInt(data.get('max_tunnels'), 10) || 0,
         });
-        status('Account added.');
+        status(t('account.added'));
       })],
     ));
   }
@@ -696,11 +688,13 @@ async function viewAccounts(root) {
       el('i', { class: tagClass(a.id) }), el('span', { text: a.name }),
     ])]),
     el('td', { class: 'mono', text: a.id }),
-    el('td', { text: a.max_tunnels ? String(a.max_tunnels) : 'no ceiling' }),
-    el('td', null, [a.enabled ? stateCell('on', 'enabled') : stateCell('held', 'disabled')]),
+    el('td', { text: a.max_tunnels ? String(a.max_tunnels) : t('account.noCeiling') }),
+    el('td', null, [a.enabled
+      ? stateCell('on', t('common.enabled'))
+      : stateCell('held', t('common.disabled'))]),
     el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
       el('button', {
-        type: 'button', class: 'btn-quiet small', text: a.enabled ? 'Disable' : 'Enable',
+        type: 'button', class: 'btn-quiet small', text: a.enabled ? t('common.disable') : t('common.enable'),
         onclick: async (e) => {
           e.target.disabled = true;
           try {
@@ -709,21 +703,21 @@ async function viewAccounts(root) {
           } catch (err) { status(err.message, true); e.target.disabled = false; }
         },
       }),
-      danger('Delete', 'Delete with all its credentials and allocations?', async () => {
+      danger(t('common.delete'), t('account.deleteConfirm'), async () => {
         await api('DELETE', `/api/accounts/${a.id}`);
-        status('Account deleted.');
+        status(t('account.deleted'));
         await render();
       }),
     ]) : null]),
   ]));
 
   root.appendChild(panel(
-    [el('span', { class: 'legend', text: `${state.accounts.length} accounts` })],
+    [el('span', { class: 'legend', text: t('account.count', { n: state.accounts.length }) })],
     [dataTable(
-      ['Account', 'ID', 'Tunnel ceiling', 'State', { label: '', right: true }],
+      [t('col.account'), t('col.id'), t('col.ceiling'), t('col.state'), { label: '', right: true }],
       rows,
-      'No accounts',
-      'An account is the owner every credential and allocation hangs off. Add one to begin.',
+      t('account.empty'),
+      t('account.emptyHint'),
     )],
   ));
 }
@@ -733,23 +727,23 @@ async function viewAccounts(root) {
 async function viewAudit(root) {
   const entries = await api('GET', '/api/audit?limit=200') || [];
 
-  root.appendChild(head('Log', 'Administrative changes, most recent first.'));
+  root.appendChild(head(t('audit.title'), t('audit.note')));
 
   const rows = entries.map(e => el('tr', null, [
     el('td', { text: when(e.at) }),
     el('td', { text: e.actor_id || e.actor_type }),
     el('td', { class: 'mono', text: e.action }),
-    el('td', { class: 'wrap', text: e.detail || e.target_id || '—' }),
-    el('td', { class: 'mono', text: e.ip || '—' }),
+    el('td', { class: 'wrap', text: e.detail || e.target_id || t('common.none') }),
+    el('td', { class: 'mono', text: e.ip || t('common.none') }),
   ]));
 
   root.appendChild(panel(
-    [el('span', { class: 'legend', text: `${entries.length} entries` })],
+    [el('span', { class: 'legend', text: t('audit.count', { n: entries.length }) })],
     [dataTable(
-      ['When', 'Who', 'Action', 'Target', 'From'],
+      [t('col.when'), t('col.who'), t('col.action'), t('col.target'), t('col.from')],
       rows,
-      'Nothing logged yet',
-      'Every change made through this panel is recorded here with who made it and from where.',
+      t('audit.empty'),
+      t('audit.emptyHint'),
     )],
   ));
 }
@@ -765,20 +759,17 @@ function showToken(token, client) {
   const reservation = client ? reservationFor(client.id) : null;
   const url = reservation ? allocationURL(reservation) : '';
 
-  body.appendChild(copyable(connectCommand(token, 8080), 'Run this on the machine'));
-  body.appendChild(copyable(token, 'Token on its own'));
+  body.appendChild(copyable(connectCommand(token, 8080), t('token.command')));
+  body.appendChild(copyable(token, t('token.alone')));
 
   if (url) {
     body.appendChild(el('p', { class: 'note' }, [
-      document.createTextNode('Once connected, this machine is reachable at '),
+      document.createTextNode(t('token.reachablePre')),
       el('strong', { text: url }),
-      document.createTextNode('. It binds the same address on every reconnect.'),
+      document.createTextNode(t('token.reachablePost')),
     ]));
   } else {
-    body.appendChild(el('p', {
-      class: 'note',
-      text: 'This machine has no reserved name yet, so it will get a random one each time it connects. Reserve a port for it under Allocations to pin it.',
-    }));
+    body.appendChild(el('p', { class: 'note', text: t('token.noReservation') }));
   }
 
   tokenDialog.returnValue = '';
@@ -793,7 +784,7 @@ document.getElementById('token-done').addEventListener('click', () => {
 // The token cannot be recovered, so dismissing by Escape must be deliberate too.
 tokenDialog.addEventListener('cancel', (e) => {
   e.preventDefault();
-  status('Copy the token before closing — it is not shown again.', true);
+  status(t('token.copyFirst'), true);
 });
 
 // ---- shell ---------------------------------------------------------------
@@ -835,13 +826,31 @@ async function render() {
     root.textContent = '';
     if (err.status === 401) { rendering = false; return showGate(false); }
     root.appendChild(el('div', { class: 'blank' }, [
-      el('span', { class: 'legend', text: 'Could not read the control plane' }),
+      el('span', { class: 'legend', text: t('common.readFailed') }),
       el('p', { class: 'note', text: err.message }),
-      el('p', null, [el('button', { type: 'button', class: 'btn-quiet', text: 'Try again', onclick: () => render() })]),
+      el('p', null, [el('button', { type: 'button', class: 'btn-quiet', text: t('common.tryAgain'), onclick: () => render() })]),
     ]));
   } finally {
     rendering = false;
   }
+}
+
+// roleLabel translates the known roles and leaves an unknown one as the server
+// spelled it, rather than showing a lookup key.
+function roleLabel(role) {
+  const label = t('role.' + role);
+  return label === 'role.' + role ? role : label;
+}
+
+// gateText writes the gate copy for the current language. Kept apart from
+// showGate so switching language mid-sign-in does not steal the focus.
+function gateText() {
+  document.getElementById('gate-title').textContent = state.needsSetup ? t('gate.setup') : t('gate.signin');
+  document.getElementById('gate-hint').textContent = state.needsSetup ? t('gate.setupHint') : '';
+  document.getElementById('gate-form').dataset.setup = state.needsSetup ? '1' : '';
+  const submit = document.querySelector('#gate-form button[type=submit]');
+  submit.dataset.label = t('gate.continue');
+  if (!submit.disabled) submit.textContent = submit.dataset.label;
 }
 
 function showGate(needsSetup) {
@@ -849,19 +858,30 @@ function showGate(needsSetup) {
   const gate = document.getElementById('gate');
   gate.hidden = false;
 
-  document.getElementById('gate-title').textContent = needsSetup ? 'Create the first administrator' : 'Sign in';
-  document.getElementById('gate-hint').textContent = needsSetup
-    ? 'This deployment has no administrator yet. Choose credentials — the password must be at least 12 characters.'
-    : '';
-  document.getElementById('gate-form').dataset.setup = needsSetup ? '1' : '';
+  state.needsSetup = !!needsSetup;
+  gateText();
   gate.querySelector('input[name=username]').focus();
+}
+
+function whoami() {
+  document.getElementById('whoami').textContent = `${state.user.username} · ${roleLabel(state.user.role)}`;
 }
 
 function showApp() {
   document.getElementById('gate').hidden = true;
   document.getElementById('app').hidden = false;
-  document.getElementById('whoami').textContent = `${state.user.username} · ${state.user.role}`;
+  whoami();
   render();
+}
+
+// Switching language re-renders whatever is on screen: the static markup is
+// handled by applyStatic, everything else was built by these views.
+function languageChanged() {
+  gateText();
+  if (!document.getElementById('app').hidden && state.user) {
+    whoami();
+    render();
+  }
 }
 
 document.getElementById('gate-form').addEventListener('submit', async (e) => {
@@ -891,7 +911,7 @@ document.getElementById('gate-form').addEventListener('submit', async (e) => {
   }
 });
 
-document.querySelector('#gate-form button[type=submit]').dataset.label = 'Continue';
+document.querySelector('#gate-form button[type=submit]').dataset.label = t('gate.continue');
 
 document.getElementById('signout').addEventListener('click', async () => {
   try { await api('DELETE', '/api/session'); } catch (_) { /* sign out regardless */ }
@@ -911,6 +931,10 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   }
   render();
 });
+
+applyStatic();
+document.getElementById('lang-app').appendChild(languageSelect(languageChanged));
+document.getElementById('lang-gate').appendChild(languageSelect(languageChanged));
 
 (async function boot() {
   try {

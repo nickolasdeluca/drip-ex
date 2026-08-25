@@ -91,6 +91,12 @@ detector matters here: this codebase is concurrency-heavy and has had real races
 - Table-driven tests where the cases vary; plain tests otherwise. Test names
   state the behavior (`TestAuthenticatedClientsBypassPerIPLimits`).
 - No new dependencies without a reason worth stating in the commit message.
+- **Admin panel copy lives in `admin/ui/i18n.js`, never as a literal in
+  `app.js` or `index.html`.** Views call `t('key')`; static markup carries
+  `data-i18n`. English and `pt-BR` ship, the language is picked from
+  `localStorage` then the browser, and both dictionaries must define the same
+  keys. Server messages pass through untranslated unless `serverError` has an
+  `err.<exact message>` entry for them.
 
 ## Control plane
 
