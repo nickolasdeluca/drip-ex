@@ -236,6 +236,28 @@ a change to the client only reaches users after a tagged release.
 is called — `install-client.sh` builds that file name literally, and the
 PowerShell installer matches on the platform and architecture within it.
 
+## CI and publishing
+
+| Workflow | Trigger | Produces |
+|---|---|---|
+| `ci.yml` | push to main, every PR | `go test -race`, `go vet`, staticcheck, gosec, govulncheck |
+| `release.yml` | tag `v*.*.*` | GoReleaser build published to GitHub Releases |
+| `release.yml` | manual dispatch | Snapshot archives as workflow artifacts, nothing published |
+| `docker.yml` | push to main | `ghcr.io/<owner>/drip-server:edge` |
+| `docker.yml` | tag `v*.*.*` | `ghcr.io/<owner>/drip-server:<version>`, `:<major>.<minor>`, `:latest` |
+
+- **The container registry is GHCR, authenticated with the built-in
+  `GITHUB_TOKEN`.** There are no registry secrets to configure; the earlier Docker
+  Hub workflow needed `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, which this fork
+  never had, so every tagged build would have failed.
+- **GitHub Packages cannot host loose binaries.** Executables go to Releases,
+  container images go to GHCR. There is no third option, and the installers read
+  from Releases.
+- **`Dockerfile.server`'s builder stage is pinned to `$BUILDPLATFORM`.** CGO is
+  off and `GOARCH` comes from `TARGETARCH`, so the arm64 image cross-compiles on
+  an amd64 runner. Dropping that pin makes the build run under QEMU, which is
+  both slow and needs a setup step the workflow does not have.
+
 ## Traps
 
 - **Never enable certmagic's on-demand issuance.** With a wildcard covering

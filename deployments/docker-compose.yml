@@ -1,6 +1,6 @@
 services:
   drip-server:
-    image: driptunnel/drip-server:${VERSION:-latest}
+    image: ghcr.io/nickolasdeluca/drip-server:${VERSION:-latest}
     container_name: drip-server
     restart: unless-stopped
     ports:
