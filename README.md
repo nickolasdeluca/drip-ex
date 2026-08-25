@@ -78,6 +78,30 @@ drip http 3000 -n myapp
 # → https://myapp.your-domain.com
 ```
 
+### Run as a Windows service
+
+Keep configured tunnels connected across reboots, with nobody logged in:
+
+```powershell
+# From an elevated PowerShell prompt
+drip config init                    # once, as the user who owns the token
+drip service install --all          # or: --tunnel web --tunnel api
+drip service start
+drip service status
+```
+
+`service install` copies your configuration to `%ProgramData%\drip\config.yaml`
+and restricts it to SYSTEM and Administrators — a service runs as LocalSystem and
+cannot read a config file from a user profile. The service reconnects with
+exponential backoff, and Windows restarts it if it fails.
+
+Logs go to `%ProgramData%\drip\logs\service.log`, plus start, stop and failure
+events in the Windows event log. `drip service run --config <path> --all` runs the
+same supervisor in the foreground, which is how to debug a service that will not
+stay up.
+
+On Linux and macOS, supervise `drip start --all` with systemd or launchd instead.
+
 ## Documentation
 
 For complete documentation, visit **[Docs](https://driptunnel.app/docs)**
