@@ -194,6 +194,16 @@ flag that maps onto append versus set, and `DELETE` only filters by
 (name, type). Exact-value deletes are therefore a read-modify-write under a
 mutex — see the comments there before changing it.
 
+**The API writes and reads values asymmetrically.** Send a TXT content raw and
+it is stored and served correctly, but every read echoes it back in zone-file
+presentation form: wrapped in double quotes, inner quotes and backslashes
+escaped. Verified against the live API — a 43-character ACME digest comes back
+as 45 characters while `dig` shows the correct unwrapped value. Every content
+read from the API therefore goes through `decodeContent`, including the
+survivors of a partial delete, which would otherwise be stored doubly quoted.
+Without it `DeleteRecords` matched nothing and returned no error, so ACME
+challenge records accumulated until Let's Encrypt refused the authorization.
+
 All three modes build on `baseTLSConfig()`: TLS 1.3 only, three cipher suites,
 no ALPN advertisement. ACME mode deliberately layers certmagic's
 `GetCertificate` onto that base rather than using certmagic's own `TLSConfig()`,

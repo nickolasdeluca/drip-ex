@@ -70,7 +70,7 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 			if content.IsDisabled {
 				continue
 			}
-			records = append(records, parseRR(entry, content.Content))
+			records = append(records, parseRR(entry, decodeContent(content.Content)))
 		}
 	}
 	return records, nil
@@ -149,11 +149,12 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns
 	for _, entry := range entries {
 		kept := make([]zoneContent, 0, len(entry.Records))
 		for _, content := range entry.Records {
-			if matchesAny(targets, entry, content.Content) {
-				deleted = append(deleted, parseRR(entry, content.Content))
+			value := decodeContent(content.Content)
+			if matchesAny(targets, entry, value) {
+				deleted = append(deleted, parseRR(entry, value))
 				continue
 			}
-			kept = append(kept, content)
+			kept = append(kept, zoneContent{Content: value, IsDisabled: content.IsDisabled})
 		}
 
 		switch {
@@ -162,6 +163,8 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns
 		case len(kept) == 0:
 			drops = append(drops, destroyFilter{Name: entry.Name, Type: entry.Type})
 		default:
+			// kept already holds decoded values: sending the API's quoted form
+			// back would store a doubly-quoted value.
 			survivors := make([]zoneContent, 0, len(kept))
 			for _, content := range kept {
 				survivors = append(survivors, zoneContent{Content: content.Content})
@@ -281,6 +284,31 @@ func normalizeName(name, zone string) string {
 		return relative
 	}
 	return "@"
+}
+
+// decodeContent turns the API's presentation form of a value back into the raw
+// value a libdns caller works with.
+//
+// Hostinger echoes contents the way a zone file writes them — wrapped in double
+// quotes, with quotes and backslashes inside escaped — even though the value it
+// serves over DNS is the unwrapped one. Comparing that wrapped form against the
+// value a caller handed us never matches, which made DeleteRecords a silent
+// no-op and left every ACME challenge record behind.
+func decodeContent(content string) string {
+	if len(content) < 2 || content[0] != '"' || content[len(content)-1] != '"' {
+		return content
+	}
+
+	inner := content[1 : len(content)-1]
+	var unescaped strings.Builder
+	unescaped.Grow(len(inner))
+	for i := 0; i < len(inner); i++ {
+		if inner[i] == '\\' && i+1 < len(inner) {
+			i++
+		}
+		unescaped.WriteByte(inner[i])
+	}
+	return unescaped.String()
 }
 
 // parseRR builds the typed libdns record for one content of an RRset, falling

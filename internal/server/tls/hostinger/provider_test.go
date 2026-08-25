@@ -3,6 +3,7 @@ package hostinger
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -471,5 +472,142 @@ func TestNormalizeName(t *testing.T) {
 		if got := normalizeName(in, zone); got != want {
 			t.Errorf("normalizeName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDecodeContent(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		// What the API actually returns for a value written unquoted.
+		`"kEYq7Rr3n_x0AbCdEfGhIjKlMnOpQrStUvWxYz01234"`: "kEYq7Rr3n_x0AbCdEfGhIjKlMnOpQrStUvWxYz01234",
+		`"plain"`:         "plain",
+		`"with \"q\""`:    `with "q"`,
+		`"back \\ slash"`: `back \ slash`,
+		// Left alone: nothing to unwrap.
+		"unquoted": "unquoted",
+		`"`:        `"`,
+		"":         "",
+		// A value whose raw form is itself quoted survives the round trip
+		// because the API escapes the inner quotes.
+		`"\"quoted\""`: `"quoted"`,
+	}
+
+	for in, want := range tests {
+		if got := decodeContent(in); got != want {
+			t.Errorf("decodeContent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGetRecordsUnquotesTheContentTheAPIReturns(t *testing.T) {
+	const value = "kEYq7Rr3n_x0AbCdEfGhIjKlMnOpQrStUvWxYz01234"
+
+	api := &fakeAPI{t: t, zone: []zoneEntry{{
+		Name:    "_acme-challenge.tunnel",
+		Type:    "TXT",
+		TTL:     300,
+		Records: []zoneContent{{Content: `"` + value + `"`}},
+	}}}
+	provider := newProvider(t, api)
+
+	records, err := provider.GetRecords(context.Background(), "example.com.")
+	if err != nil {
+		t.Fatalf("GetRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("GetRecords() returned %d records, want 1", len(records))
+	}
+
+	txt, ok := records[0].(libdns.TXT)
+	if !ok {
+		t.Fatalf("GetRecords() returned %T, want libdns.TXT", records[0])
+	}
+	if txt.Text != value {
+		t.Errorf("text = %q, want the unquoted %q", txt.Text, value)
+	}
+}
+
+// The API echoes TXT contents wrapped in quotes while serving the unwrapped
+// value over DNS. Matching the wrapped form against what certmagic hands back
+// never succeeded, so cleanup deleted nothing and challenge records piled up.
+func TestDeleteRecordsMatchesContentTheAPIReturnsQuoted(t *testing.T) {
+	const value = "kEYq7Rr3n_x0AbCdEfGhIjKlMnOpQrStUvWxYz01234"
+
+	api := &fakeAPI{t: t, zone: []zoneEntry{{
+		Name:    "_acme-challenge.tunnel",
+		Type:    "TXT",
+		TTL:     300,
+		Records: []zoneContent{{Content: `"` + value + `"`}},
+	}}}
+	provider := newProvider(t, api)
+
+	deleted, err := provider.DeleteRecords(context.Background(), "example.com.",
+		[]libdns.Record{libdns.TXT{Name: "_acme-challenge.tunnel", TTL: 300 * time.Second, Text: value}})
+	if err != nil {
+		t.Fatalf("DeleteRecords() error = %v", err)
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("DeleteRecords() reported %d records, want the quoted content to match", len(deleted))
+	}
+	if len(api.calls) != 2 || api.calls[1].method != http.MethodDelete {
+		t.Fatalf("DeleteRecords() did not drop the RRset; calls = %d", len(api.calls))
+	}
+}
+
+// A partial rewrite must send the survivors back unquoted. Echoing the API's
+// own quoted form would store a doubly-quoted value.
+func TestDeleteRecordsRewritesSurvivorsUnquoted(t *testing.T) {
+	const keep = "keep-this-one"
+	const drop = "drop-this-one"
+
+	api := &fakeAPI{t: t, zone: []zoneEntry{{
+		Name:    "_acme-challenge.tunnel",
+		Type:    "TXT",
+		TTL:     300,
+		Records: []zoneContent{{Content: `"` + keep + `"`}, {Content: `"` + drop + `"`}},
+	}}}
+	provider := newProvider(t, api)
+
+	if _, err := provider.DeleteRecords(context.Background(), "example.com.",
+		[]libdns.Record{libdns.TXT{Name: "_acme-challenge.tunnel", Text: drop}}); err != nil {
+		t.Fatalf("DeleteRecords() error = %v", err)
+	}
+
+	if api.calls[1].method != http.MethodPut {
+		t.Fatalf("second call = %s, want a PUT rewriting the survivors", api.calls[1].method)
+	}
+	req := decodeUpdate(t, api.calls[1].body)
+	if len(req.Zone) != 1 || len(req.Zone[0].Records) != 1 {
+		t.Fatalf("rewrite = %+v, want one entry holding one content", req.Zone)
+	}
+	if got := req.Zone[0].Records[0].Content; got != keep {
+		t.Errorf("survivor = %q, want the unquoted %q", got, keep)
+	}
+}
+
+// The accumulation this fix targets: eleven challenge tokens left behind by
+// cleanups that matched nothing. Deleting the RRset must clear all of them.
+func TestDeleteRecordsClearsAccumulatedChallengeRecords(t *testing.T) {
+	contents := make([]zoneContent, 0, 11)
+	for i := 0; i < 11; i++ {
+		contents = append(contents, zoneContent{Content: fmt.Sprintf(`"token-%02d"`, i)})
+	}
+
+	api := &fakeAPI{t: t, zone: []zoneEntry{{
+		Name: "_acme-challenge.tunnel", Type: "TXT", TTL: 300, Records: contents,
+	}}}
+	provider := newProvider(t, api)
+
+	deleted, err := provider.DeleteRecords(context.Background(), "example.com.",
+		[]libdns.Record{libdns.RR{Name: "_acme-challenge.tunnel", Type: "TXT"}})
+	if err != nil {
+		t.Fatalf("DeleteRecords() error = %v", err)
+	}
+	if len(deleted) != 11 {
+		t.Fatalf("DeleteRecords() reported %d records, want all 11", len(deleted))
+	}
+	if api.calls[1].method != http.MethodDelete {
+		t.Fatalf("second call = %s, want DELETE once every content matched", api.calls[1].method)
 	}
 }
