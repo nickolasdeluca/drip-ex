@@ -237,6 +237,20 @@ drip start --all      # everything in the file
 drip start            # list what is configured
 ```
 
+Tunnels can be managed without editing the file:
+
+```bash
+drip config tunnel add --name web --type http --port 3000
+drip config tunnel add --name db --type tcp --port 5432 --bandwidth 5M
+drip config tunnel add --name web --type http --port 9765 --replace
+drip config tunnel list
+drip config tunnel remove web
+```
+
+Leave `--subdomain` out and the server assigns the allocation reserved for this
+client, so a renamed allocation is picked up on the next reconnect. Naming one
+pins the request to that exact subdomain instead.
+
 Other config commands: `drip config show`, `drip config set --server X --token Y`,
 `drip config validate`, `drip config reset`.
 
@@ -249,6 +263,7 @@ Keeps configured tunnels connected across reboots with nobody logged in.
 ```powershell
 # From an elevated PowerShell prompt
 drip config init                    # once, as the user who owns the token
+drip config tunnel add --name web --type http --port 3000
 drip service install --all          # or: --tunnel web --tunnel api
 drip service start
 drip service status
@@ -462,6 +477,7 @@ per-username half of the limit is the one doing the work.
 | `drip attach [type] [port]` | Follow a background tunnel's output |
 | `drip stop <type> <port>` or `drip stop all` | Stop background tunnels |
 | `drip config init\|show\|set\|validate\|reset` | Client configuration |
+| `drip config tunnel add\|list\|remove` | Tunnels this client exposes |
 | `drip service …` | Windows service (see above) |
 | `drip server` | Run the tunnel server |
 | `drip server config` | Server configuration helpers |

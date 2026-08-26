@@ -68,6 +68,14 @@ msg_en() {
         skip_verify) echo "Skip TLS certificate verification? (for self-signed certs)" ;;
         config_saved) echo "Configuration saved" ;;
         config_failed) echo "Failed to save configuration" ;;
+        add_tunnel_q) echo "Add a tunnel to the configuration now?" ;;
+        enter_local_port) echo "Local port to expose (e.g., 3000)" ;;
+        port_required) echo "A port between 1 and 65535 is required" ;;
+        enter_tunnel_type) echo "Tunnel type: http, https or tcp [http]" ;;
+        enter_tunnel_name) echo "Name for this tunnel" ;;
+        enter_subdomain) echo "Subdomain (optional; empty takes the allocation reserved for this machine)" ;;
+        tunnel_added) echo "Tunnel added" ;;
+        tunnel_failed) echo "Failed to add the tunnel" ;;
         install_complete) echo "Installation completed!" ;;
         usage_title) echo "Usage" ;;
         usage_http) echo "Expose HTTP service on port 3000" ;;
@@ -147,6 +155,14 @@ msg_zh() {
         skip_verify) echo "跳过 TLS 证书验证？（用于自签名证书）" ;;
         config_saved) echo "配置已保存" ;;
         config_failed) echo "配置保存失败" ;;
+        add_tunnel_q) echo "现在向配置中添加隧道？" ;;
+        enter_local_port) echo "要暴露的本地端口（例如：3000）" ;;
+        port_required) echo "端口必须在 1 到 65535 之间" ;;
+        enter_tunnel_type) echo "隧道类型：http、https 或 tcp [http]" ;;
+        enter_tunnel_name) echo "该隧道的名称" ;;
+        enter_subdomain) echo "子域名（可选；留空则使用为该机器预留的分配）" ;;
+        tunnel_added) echo "隧道已添加" ;;
+        tunnel_failed) echo "添加隧道失败" ;;
         install_complete) echo "安装完成！" ;;
         usage_title) echo "使用方法" ;;
         usage_http) echo "暴露本地 3000 端口的 HTTP 服务" ;;
@@ -792,6 +808,52 @@ configure_client() {
         print_success "$(msg config_saved)"
     else
         print_error "$(msg config_failed)"
+        return
+    fi
+
+    configure_tunnel "$binary_path"
+}
+
+# configure_tunnel records what this machine exposes. The allocation on the
+# server decides the public name; this decides the local port behind it, and
+# 'drip start' has nothing to run without it.
+configure_tunnel() {
+    local binary_path="$1"
+
+    prompt_input "$(msg add_tunnel_q) [Y/n]: " tunnel_choice
+    if [[ "$tunnel_choice" =~ ^[Nn]$ ]]; then
+        return
+    fi
+
+    local port=""
+    while true; do
+        prompt_input "$(msg enter_local_port): " port
+        if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+            break
+        fi
+        print_error "$(msg port_required)"
+    done
+
+    local type=""
+    prompt_input "$(msg enter_tunnel_type): " type
+    type="${type:-http}"
+
+    local name=""
+    prompt_input "$(msg enter_tunnel_name) [$type-$port]: " name
+    name="${name:-$type-$port}"
+
+    local subdomain=""
+    prompt_input "$(msg enter_subdomain): " subdomain
+
+    local args=(config tunnel add --name "$name" --type "$type" --port "$port" --replace)
+    if [[ -n "$subdomain" ]]; then
+        args+=(--subdomain "$subdomain")
+    fi
+
+    if "$binary_path" "${args[@]}"; then
+        print_success "$(msg tunnel_added)"
+    else
+        print_error "$(msg tunnel_failed)"
     fi
 }
 

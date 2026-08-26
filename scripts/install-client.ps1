@@ -333,6 +333,55 @@ function Initialize-Configuration {
 
     Invoke-Drip -BinaryPath $BinaryPath -Arguments @('config', 'set', '--server', $server, '--token', $token)
     Write-Ok 'Configuration saved'
+
+    Add-TunnelDefinition -BinaryPath $BinaryPath
+}
+
+# Add-TunnelDefinition asks what this machine exposes.
+#
+# The reservation on the server decides the public name; the config here decides
+# the local port behind it. A service with no tunnel in its config refuses to
+# install, so a run that ends in -InstallService has to ask for one.
+function Add-TunnelDefinition {
+    param([string]$BinaryPath)
+
+    $needsTunnel = $InstallService -or $AllTunnels -or $Tunnel
+    if (-not $needsTunnel) {
+        $answer = Read-Host 'Add a tunnel to the configuration now? [Y/n]'
+        if ($answer -match '^[Nn]') { return }
+    } else {
+        Write-Host ''
+        Write-Host 'The service needs at least one tunnel in the configuration.' -ForegroundColor Cyan
+    }
+
+    $port = 0
+    while ($port -lt 1 -or $port -gt 65535) {
+        $entered = (Read-Host 'Local port to expose (e.g. 3000)').Trim()
+        if (-not [int]::TryParse($entered, [ref]$port)) { $port = 0 }
+    }
+
+    $type = (Read-Host 'Tunnel type: http, https or tcp [http]').Trim().ToLower()
+    if (-not $type) { $type = 'http' }
+
+    $name = (Read-Host "Name for this tunnel [$type-$port]").Trim()
+    if (-not $name) { $name = "$type-$port" }
+
+    Write-Note 'Leave the subdomain empty to take the allocation reserved for this machine.'
+    $subdomain = (Read-Host 'Subdomain (optional)').Trim()
+
+    $arguments = @('config', 'tunnel', 'add', '--name', $name, '--type', $type, '--port', "$port", '--replace')
+    if ($subdomain) { $arguments += @('--subdomain', $subdomain) }
+
+    Invoke-Drip -BinaryPath $BinaryPath -Arguments $arguments
+}
+
+# Test-TunnelConfigured reports whether the config file names any tunnel.
+function Test-TunnelConfigured {
+    param([string]$BinaryPath)
+
+    $names = & $BinaryPath config tunnel list --names 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return (@($names | Where-Object { $_.Trim() }).Count -gt 0)
 }
 
 function Register-DripService {
@@ -340,6 +389,16 @@ function Register-DripService {
 
     if (-not (Test-Administrator)) {
         throw 'Installing the service requires an elevated prompt (Run as administrator).'
+    }
+
+    # The service runs the tunnels the config names, so it refuses to install
+    # against a config that names none. Ask before that error, not after it.
+    if (-not (Test-TunnelConfigured -BinaryPath $BinaryPath)) {
+        if ($Quiet) {
+            throw ('No tunnels are configured. Add one and install the service: ' +
+                'drip config tunnel add --name web --type http --port 3000; drip service install --all')
+        }
+        Add-TunnelDefinition -BinaryPath $BinaryPath
     }
 
     if (Get-InstalledService) {
@@ -419,6 +478,7 @@ function Invoke-Install {
     Write-Host '  drip http 3000                 Expose a local HTTP server'
     Write-Host '  drip tcp 5432                  Expose a local TCP service'
     Write-Host '  drip config show               Show the current configuration'
+    Write-Host '  drip config tunnel add ...     Add a tunnel to the configuration'
     Write-Host '  drip service install --all     Run configured tunnels as a Windows service'
     Write-Host '  drip service status            Check the service'
     Write-Host ''

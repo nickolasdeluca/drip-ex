@@ -324,6 +324,14 @@ cross-platform.
   that as fatal would leave a service permanently down over its own stale session.
 - **Logging goes through `utils.InitFileLogger`, not `zap.Config.OutputPaths`.**
   zap parses output paths as URLs and rejects `C:\...` as an unknown scheme.
+- **The service needs a tunnel in the config, and a reservation is not one.**
+  The allocation on the server decides the public name; `tunnels:` decides the
+  local port behind it, and `selectTunnels` refuses to install a service that
+  has nothing to run. `drip config tunnel add|list|remove` writes that half
+  without hand-editing YAML, and both installers prompt for it — the PowerShell
+  one blocks service registration until the config names a tunnel, since
+  otherwise `-InstallService` fails on every clean install.
+  `config tunnel list --names` is the scriptable form the installers read.
 - **`scripts/install-client.ps1` is the Windows installer**; the bash installers
   cannot register a service and only run under Git Bash or MSYS. It can install
   the service in the same pass (`-InstallService`), and it stops a running
