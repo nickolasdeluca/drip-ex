@@ -61,8 +61,41 @@ type ClientConfig struct {
 	Tunnels []*TunnelConfig `yaml:"tunnels,omitempty"` // Predefined tunnels
 }
 
+// DefaultServerPort is used when the server address omits a port
+const DefaultServerPort = "443"
+
+// NormalizeServerAddress appends DefaultServerPort when the address has no port.
+// Addresses that already carry a port are returned unchanged, and malformed ones
+// are left for Validate to report.
+func NormalizeServerAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return addr
+	}
+
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if port == "" {
+			return net.JoinHostPort(host, DefaultServerPort)
+		}
+		return addr
+	}
+
+	// Bare IPv6 literals ("::1", "[fd00::1]") need brackets before the port
+	if bare := strings.Trim(addr, "[]"); net.ParseIP(bare) != nil {
+		return net.JoinHostPort(bare, DefaultServerPort)
+	}
+
+	if strings.Contains(addr, ":") {
+		return addr
+	}
+
+	return addr + ":" + DefaultServerPort
+}
+
 // Validate checks if the client configuration is valid
 func (c *ClientConfig) Validate() error {
+	c.Server = NormalizeServerAddress(c.Server)
+
 	if c.Server == "" {
 		return fmt.Errorf("server address is required")
 	}

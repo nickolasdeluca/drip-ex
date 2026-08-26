@@ -81,7 +81,7 @@ func init() {
 
 	configShowCmd.Flags().BoolVar(&configFull, "full", false, "Show full token (not hidden)")
 
-	configSetCmd.Flags().StringVar(&configServer, "server", "", "Server address (e.g., tunnel.example.com:443)")
+	configSetCmd.Flags().StringVar(&configServer, "server", "", "Server address (e.g., tunnel.example.com:443; port defaults to 443)")
 	configSetCmd.Flags().StringVar(&configToken, "token", "", "Authentication token")
 
 	configResetCmd.Flags().BoolVar(&configForce, "force", false, "Force reset without confirmation")
@@ -94,7 +94,7 @@ func runConfigInit(_ *cobra.Command, _ []string) error {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Print(ui.Muted("Server address (e.g., tunnel.example.com:443): "))
+	fmt.Print(ui.Muted("Server address (e.g., tunnel.example.com:443, port defaults to 443): "))
 	serverAddr, _ := reader.ReadString('\n')
 	serverAddr = strings.TrimSpace(serverAddr)
 
@@ -192,9 +192,9 @@ func runConfigSet(_ *cobra.Command, _ []string) error {
 	var updates []string
 
 	if configServer != "" {
-		cfg.Server = configServer
+		cfg.Server = config.NormalizeServerAddress(configServer)
 		modified = true
-		updates = append(updates, "Server updated: "+configServer)
+		updates = append(updates, "Server updated: "+cfg.Server)
 	}
 
 	if configToken != "" {

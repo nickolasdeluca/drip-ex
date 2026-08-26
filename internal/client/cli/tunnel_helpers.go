@@ -59,7 +59,7 @@ func resolveServerAddrAndToken(tunnelType string, port int) (string, string, err
 	}
 
 	if serverURL != "" {
-		return serverURL, token, nil
+		return config.NormalizeServerAddress(serverURL), token, nil
 	}
 
 	cfg, err := config.LoadClientConfig("")
