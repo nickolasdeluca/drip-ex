@@ -373,3 +373,137 @@ func TestProvisionNeedsExactlyOneCredentialSource(t *testing.T) {
 		})
 	}
 }
+
+// newRangedTestServer is newProvisionTestServer with the deployment reporting
+// the TCP port range its allocator actually serves.
+func newRangedTestServer(t *testing.T) (*Server, *store.Store) {
+	t.Helper()
+	s, st := newProvisionTestServer(t)
+	s.deployment.TCPPortMin = 33000
+	s.deployment.TCPPortMax = 33020
+	return s, st
+}
+
+func TestProvisionRefusesATCPPortOutsideTheServerRange(t *testing.T) {
+	s, st := newRangedTestServer(t)
+	_, client := seedCredential(t, st, "acme", "db-box")
+
+	rec, _ := provision(t, s, `{
+		"client_id": "`+client.ID+`",
+		"tunnel_type": "tcp",
+		"local_port": 5432,
+		"tcp_port": 20050
+	}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "33000-33020") {
+		t.Errorf("the error should name the range: %s", rec.Body.String())
+	}
+
+	// Nothing may be written for a port the server could never allocate.
+	list, err := st.ListReservations(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list reservations: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("reservations = %d, want none", len(list))
+	}
+}
+
+func TestProvisionAcceptsATCPPortInsideTheServerRange(t *testing.T) {
+	s, st := newRangedTestServer(t)
+	_, client := seedCredential(t, st, "acme", "db-box")
+
+	rec, out := provision(t, s, `{
+		"client_id": "`+client.ID+`",
+		"tunnel_type": "tcp",
+		"local_port": 5432,
+		"tcp_port": 33005
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if out.Reservation == nil || out.Reservation.TCPPort != 33005 {
+		t.Fatalf("reservation = %+v, want port 33005", out.Reservation)
+	}
+}
+
+// A deployment that never reported its range must not have allocations refused
+// on information it did not give.
+func TestProvisionSkipsTheRangeCheckWhenTheServerDidNotReportOne(t *testing.T) {
+	s, st := newProvisionTestServer(t)
+	_, client := seedCredential(t, st, "acme", "db-box")
+
+	rec, _ := provision(t, s, `{
+		"client_id": "`+client.ID+`",
+		"tunnel_type": "tcp",
+		"local_port": 5432,
+		"tcp_port": 20050
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The builder refuses an out-of-range port it would only have adopted, too:
+// the command would promise an address the server cannot serve.
+func TestProvisionRefusesAdoptingAnOutOfRangeAllocation(t *testing.T) {
+	s, st := newRangedTestServer(t)
+	acct, client := seedCredential(t, st, "acme", "db-box")
+
+	stale := &store.Reservation{
+		AccountID:  acct.ID,
+		TunnelType: store.TunnelTypeTCP,
+		TCPPort:    20050,
+		Enabled:    true,
+	}
+	if err := st.CreateReservation(context.Background(), stale); err != nil {
+		t.Fatalf("create reservation: %v", err)
+	}
+
+	rec, _ := provision(t, s, `{
+		"client_id": "`+client.ID+`",
+		"tunnel_type": "tcp",
+		"local_port": 5432,
+		"tcp_port": 20050
+	}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateReservationRefusesATCPPortOutsideTheServerRange(t *testing.T) {
+	s, st := newRangedTestServer(t)
+	acct, err := st.CreateAccount(context.Background(), "acme", 0)
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/reservations",
+		strings.NewReader(`{"account_id":"`+acct.ID+`","tcp_port":20050}`))
+	rec := httptest.NewRecorder()
+	s.handleCreateReservation(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "33000-33020") {
+		t.Errorf("the error should name the range: %s", rec.Body.String())
+	}
+}
+
+func TestServerInfoReportsTheTCPPortRange(t *testing.T) {
+	s, _ := newRangedTestServer(t)
+
+	rec := httptest.NewRecorder()
+	s.handleServerInfo(rec, httptest.NewRequest(http.MethodGet, "/api/server", nil))
+
+	var out serverInfoView
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.TCPPortMin != 33000 || out.TCPPortMax != 33020 {
+		t.Errorf("range = %d-%d, want 33000-33020", out.TCPPortMin, out.TCPPortMax)
+	}
+}

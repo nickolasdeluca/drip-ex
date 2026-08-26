@@ -364,6 +364,13 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		reservation.TunnelType = store.TunnelTypeTCP
 	}
 
+	if reservation.TCPPort != 0 {
+		if err := s.checkTCPPortRange(reservation.TCPPort); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	if err := s.checkReservationClient(r, reservation); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -459,6 +466,28 @@ type serverInfoView struct {
 	TunnelDomain string `json:"tunnel_domain"`
 	PublicPort   int    `json:"public_port"`
 	TLS          bool   `json:"tls"`
+	// TCPPortMin and TCPPortMax bound what a TCP allocation may pin. Zero
+	// means the deployment did not say, and the panel offers no range.
+	TCPPortMin int `json:"tcp_port_min,omitempty"`
+	TCPPortMax int `json:"tcp_port_max,omitempty"`
+}
+
+// checkTCPPortRange refuses a port the server could never allocate.
+//
+// The range lives in the server config and the reservation lives in SQLite, so
+// nothing else connects them: without this a port outside the range is written
+// happily and only fails when a client tries to register, which reads as the
+// allocation having been lost. A deployment that did not report its range is
+// left alone — refusing on missing information would be worse than the symptom.
+func (s *Server) checkTCPPortRange(port int) error {
+	min, max := s.deployment.TCPPortMin, s.deployment.TCPPortMax
+	if min == 0 || max == 0 {
+		return nil
+	}
+	if port < min || port > max {
+		return fmt.Errorf("tcp port %d is outside this server's range %d-%d", port, min, max)
+	}
+	return nil
 }
 
 // handleServerInfo tells the panel how clients reach this deployment, so it can

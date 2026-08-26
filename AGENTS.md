@@ -271,10 +271,15 @@ renders no installer and must not grow into one.
 - **The Windows script is one command per line.** `&&` needs PowerShell 7 and
   these hosts are often on Windows PowerShell 5.1; the Unix script chains with
   `&&` so a failure stops the sequence instead of half-configuring the machine.
-- **Reserving a TCP port does not check the server's port range.** The panel has
-  never done this — `Deployment` does not carry `tcp_port_min`/`max` — so a port
-  outside it is accepted here and refused at registration. Fix it in both paths
-  or neither.
+- **A TCP port outside the server's range is refused up front.**
+  `Deployment` carries `tcp_port_min`/`max` and `checkTCPPortRange` guards both
+  reservation paths, because a port the allocator can never hand out is written
+  happily into SQLite and only fails when a client registers — which reads as
+  the allocation having been lost. The builder checks before resolving the
+  allocation, so an out-of-range port is refused whether it would be created or
+  adopted. A deployment reporting no range (both zero) is left alone: refusing
+  on missing information is worse than the symptom. `drip admin reservation
+  create` still writes straight to the database and knows no range.
 
 ## TLS
 

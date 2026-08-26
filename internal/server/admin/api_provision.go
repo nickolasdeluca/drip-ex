@@ -145,6 +145,15 @@ func (s *Server) planProvision(r *http.Request, req *provisionRequest) (provisio
 	if tunnelType == store.TunnelTypeHTTP && req.TCPPort != 0 {
 		return plan, fmt.Errorf("an http tunnel reserves a name, not a port")
 	}
+	// Checked before the allocation is resolved, so an out-of-range port is
+	// refused whether it would be created here or adopted from an earlier one.
+	// A command promising a port the server cannot allocate is worse than no
+	// command at all.
+	if req.TCPPort != 0 {
+		if err := s.checkTCPPortRange(req.TCPPort); err != nil {
+			return plan, err
+		}
+	}
 
 	localAddr := strings.TrimSpace(req.LocalAddress)
 	if err := printableArg("local address", localAddr); err != nil {
