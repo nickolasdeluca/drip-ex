@@ -190,7 +190,7 @@ select.lang option { background: var(--plate-raised); color: var(--ink); letter-
 
 /* ---- main -------------------------------------------------------------- */
 
-main { padding: 26px 20px 72px; max-width: 1360px; }
+main { padding: 26px 20px 72px; }
 
 .view-head { margin-bottom: 20px; }
 .view-head h1 { margin-bottom: 3px; }
@@ -351,6 +351,8 @@ main { padding: 26px 20px 72px; max-width: 1360px; }
   text-align: center;
 }
 .blank .legend { display: block; margin-bottom: 6px; }
+/* .note caps its measure at 66ch; centre it so it sits under the legend. */
+.blank .note { margin-inline: auto; }
 
 /* ---- counts on the rail ------------------------------------------------ */
 
