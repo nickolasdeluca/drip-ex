@@ -278,8 +278,15 @@ renders no installer and must not grow into one.
   the allocation having been lost. The builder checks before resolving the
   allocation, so an out-of-range port is refused whether it would be created or
   adopted. A deployment reporting no range (both zero) is left alone: refusing
-  on missing information is worse than the symptom. `drip admin reservation
-  create` still writes straight to the database and knows no range.
+  on missing information is worse than the symptom.
+- **`drip admin reservation create` checks the same thing, but only when it can
+  prove the config is about that database.** It writes straight to SQLite and
+  never sees the flags the running server was started with, so it reads the
+  range from the server config and uses it only when `db_path` there resolves
+  to the same file as `--db` (`sameDatabase` compares the files, not the
+  spelling). An omitted range falls back to `DefaultTCPPortMin/Max`, because
+  that is what the server itself would use. `--force` reserves anyway, for the
+  deployment whose server was started with overriding flags.
 
 ## TLS
 
