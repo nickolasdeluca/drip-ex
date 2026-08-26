@@ -27,7 +27,7 @@ Six phases. Keep this list current as phases land.
 4. **Admin API + embedded UI** — on its own port, separate from tunnel traffic,
    optionally published on the server domain as well. *Done.*
 5. **Claim flow** — `active_sessions` rows, "pin this running tunnel" endpoint,
-   rename-on-pin.
+   rename-on-pin. *Done.*
 6. **Windows service** — `golang.org/x/sys/windows/svc` wrapper around the
    tunnel runner. *Done.*
 
@@ -166,6 +166,79 @@ pin a port instead, and the manager keys them by the derived `tcp-<port>`.
 Reservations survive client deletion: the `clients` foreign key is
 `ON DELETE SET NULL`, so the name stays with the account and only the binding
 drops. Deleting the *account* cascades the reservations away with it.
+
+## Live sessions and the claim flow
+
+`active_sessions` is what is connected *right now*, as the control plane sees
+it. `RegistrationHandler.recordSession` writes a row after the manager accepts a
+registration, and `ConnectionLifecycleManager.Close` deletes it. The row carries
+what the manager never keeps: the reservation that was bound, the client's local
+port, the remote IP and the start time.
+
+- **The manager stays the authority on what is live.** Sessions are bookkeeping
+  laid alongside it: `GET /api/tunnels` reads the manager and decorates each
+  entry from the session table, and `GET /api/sessions` drops rows the manager
+  does not know about rather than reporting them as connected.
+- **Recording never costs a client its tunnel.** A failed insert is logged and
+  swallowed; the tunnel serves traffic, it just is not pinnable until it
+  reconnects.
+- **Rows are purged at startup.** They describe one process, so anything a
+  previous run left behind is stale, and its name has to be free again.
+- **Teardown deletes the row before unregistering from the manager.** The
+  subdomain index is unique, and a client that reconnects the instant the name
+  frees up would otherwise collide with its own stale row.
+
+`POST /api/sessions/{id}/pin` is the second reservation path: instead of
+reserving a name and waiting for a client to bind it, an operator pins a tunnel
+that is already up. It writes the same `tunnel_reservations` row the portal-first
+path writes, bound to the session's account and client.
+
+- **The pin lands on the next reconnect, never on the live tunnel.** The running
+  tunnel resolved its name before the reservation existed. Passing a different
+  `subdomain` is rename-on-pin: the reservation takes the new name, the live
+  tunnel keeps the old one, and the response carries `renamed: true` so the
+  panel can say so.
+- **A pin that kept the name links the session to the reservation**
+  (`SetSessionReservation`); a rename leaves it null, because the live tunnel is
+  not the thing that was reserved.
+- **Unauthenticated tunnels cannot be pinned.** Anonymous and legacy shared-token
+  registrations have no account or client, and a reservation with an invented
+  owner is one no client can ever bind. The endpoint refuses them with an error
+  that says to issue a credential first.
+- **TCP sessions pin their port**, not a name; asking to rename one is a 400.
+
+### The control stream and rebind
+
+Pinning also asks the live client to move immediately, so an operator never has
+to reach the machine to restart a service. The message rides a **control
+stream**, and `POST .../pin` reports `rebound: true` when it was sent.
+
+- **The client opens the control stream, never the server.** The server opens a
+  stream per proxied request, so a stream it opened could not be told apart from
+  traffic — and on a TCP tunnel the first bytes come from an untrusted visitor,
+  who could otherwise forge control messages. A stream the client opened on its
+  authenticated session cannot be spoofed. The server accepts it in
+  `Connection.acceptControlStreams`; anything the server accepts is by
+  definition a control stream, because data never flows that way.
+- **Capabilities are negotiated both ways.** The client sets
+  `RegisterRequest.SupportsControl`, the server answers with
+  `RegisterResponse.SupportsControl`, and the client opens the stream only when
+  the server advertised it. An older client opens nothing and an older server
+  accepts nothing, so both fall back to "the allocation waits for the next
+  reconnect".
+- **`FrameTypeRebind` (0x09) is server to client.** The client writes nothing;
+  the server's watcher treats the first read error as "the stream is gone".
+- **A rebind is acted on by reconnecting.** The name is decided at registration,
+  so the client records the target, drops the session, and asks for it on the
+  way back up. `PendingRebind` outranks the sticky name both runners keep
+  (`tunnel_supervisor.go`, `tunnel_runner.go`) — without that override the
+  client would reconnect asking for the name it already had and never move.
+- **An empty subdomain in a rebind is an instruction, not an absence.** It means
+  "ask for nothing", which lands the client on whatever reservation resolves for
+  it. `PendingRebind` returns a separate bool for exactly this reason.
+- **Sending a rebind is best effort and never fails the pin.** The reservation
+  is correct either way; `ErrNoControlStream` is expected often enough that it
+  is not even logged.
 
 ## TLS
 

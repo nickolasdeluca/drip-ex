@@ -39,7 +39,9 @@ type ConnectionConfig struct {
 	Authenticator *auth.Authenticator
 	// Resolver applies tunnel reservation policy. Nil means every registration
 	// resolves to an ephemeral tunnel.
-	Resolver     *reservations.Resolver
+	Resolver *reservations.Resolver
+	// Sessions records this tunnel while it is live, for the admin panel.
+	Sessions     SessionRecorder
 	Manager      *tunnel.Manager
 	Logger       *zap.Logger
 	PortAlloc    *PortAllocator
@@ -58,6 +60,7 @@ type Connection struct {
 	authenticator    *auth.Authenticator
 	identity         *auth.Identity
 	resolver         *reservations.Resolver
+	sessions         SessionRecorder
 	manager          *tunnel.Manager
 	logger           *zap.Logger
 	subdomain        string
@@ -102,6 +105,7 @@ func NewConnection(cfg ConnectionConfig) *Connection {
 		authToken:        cfg.AuthToken,
 		authenticator:    cfg.Authenticator,
 		resolver:         cfg.Resolver,
+		sessions:         cfg.Sessions,
 		manager:          cfg.Manager,
 		logger:           cfg.Logger,
 		portAlloc:        cfg.PortAlloc,
@@ -253,6 +257,7 @@ func (c *Connection) Handle() error {
 		c.logger,
 	)
 	regHandler.SetResolver(c.resolver)
+	regHandler.SetSessionRecorder(c.sessions)
 
 	regReq := &RegistrationRequest{
 		TunnelType:       req.TunnelType,
@@ -285,6 +290,7 @@ func (c *Connection) Handle() error {
 	if c.lifecycleManager != nil {
 		c.lifecycleManager.SetPortAllocation(c.portAlloc, c.port)
 		c.lifecycleManager.SetTunnelRegistration(c.manager, c.subdomain, "", c.groupManager)
+		c.lifecycleManager.SetSessionRecord(c.sessions, result.SessionID)
 	}
 
 	// Handle connection groups

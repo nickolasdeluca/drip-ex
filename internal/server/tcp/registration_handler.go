@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"drip/internal/server/reservations"
+	"drip/internal/server/store"
 	"drip/internal/server/tunnel"
 	"drip/internal/shared/protocol"
 	"drip/internal/shared/utils"
@@ -21,12 +22,20 @@ type tunnelManager interface {
 	Unregister(subdomain string)
 }
 
+// SessionRecorder persists what is live right now, so the admin panel can show
+// a running tunnel and pin it. Nil on a server with no control plane database.
+type SessionRecorder interface {
+	CreateSession(ctx context.Context, sess *store.Session) error
+	DeleteSession(ctx context.Context, id string) error
+}
+
 // RegistrationHandler handles tunnel registration logic.
 type RegistrationHandler struct {
 	manager      tunnelManager
 	portAlloc    *PortAllocator
 	groupManager *ConnectionGroupManager
 	resolver     *reservations.Resolver
+	sessions     SessionRecorder
 	domain       string
 	tunnelDomain string
 	publicPort   int
@@ -68,6 +77,12 @@ type RegistrationRequest struct {
 	Owner tunnel.Owner
 }
 
+// SetSessionRecorder attaches the live-session recorder. Without one a tunnel
+// still registers; it simply never shows up as pinnable in the panel.
+func (rh *RegistrationHandler) SetSessionRecorder(sessions SessionRecorder) {
+	rh.sessions = sessions
+}
+
 // SetResolver attaches the reservation resolver. Without one every
 // registration resolves to an ephemeral tunnel, which is the behavior of a
 // server with no control plane database.
@@ -81,6 +96,8 @@ type RegistrationResult struct {
 	Port      int
 	// ReservationID is set when the tunnel bound a reservation.
 	ReservationID string
+	// SessionID identifies the active_sessions row, empty when none was written.
+	SessionID string
 	// Bandwidth is the reservation's per-tunnel override, if it sets one.
 	Bandwidth        string
 	TunnelURL        string
@@ -189,6 +206,8 @@ func (rh *RegistrationHandler) Register(ctx context.Context, req *RegistrationRe
 		recommendedConns = 4
 	}
 
+	sessionID := rh.recordSession(ctx, req, resolution, subdomain, port)
+
 	rh.logger.Info("Tunnel registered",
 		zap.String("subdomain", subdomain),
 		zap.String("tunnel_type", string(req.TunnelType)),
@@ -203,6 +222,7 @@ func (rh *RegistrationHandler) Register(ctx context.Context, req *RegistrationRe
 		Subdomain:        subdomain,
 		Port:             port,
 		ReservationID:    resolution.ReservationID,
+		SessionID:        sessionID,
 		Bandwidth:        resolution.Bandwidth,
 		TunnelURL:        tunnelURL,
 		TunnelID:         tunnelID,
@@ -210,6 +230,43 @@ func (rh *RegistrationHandler) Register(ctx context.Context, req *RegistrationRe
 		RecommendedConns: recommendedConns,
 		TunnelConn:       tunnelConn,
 	}, nil
+}
+
+// recordSession writes the live-session row and returns its ID. Bookkeeping
+// must never cost a client its tunnel, so a failure is logged and swallowed.
+func (rh *RegistrationHandler) recordSession(
+	ctx context.Context,
+	req *RegistrationRequest,
+	resolution *reservations.Resolution,
+	subdomain string,
+	port int,
+) string {
+	if rh.sessions == nil {
+		return ""
+	}
+
+	sess := &store.Session{
+		AccountID:  req.Owner.AccountID,
+		ClientID:   req.Owner.ClientID,
+		TunnelType: string(req.TunnelType),
+		Subdomain:  subdomain,
+		TCPPort:    port,
+		LocalPort:  req.LocalPort,
+		RemoteIP:   req.RemoteIP,
+	}
+	if resolution.ReservationID != "" {
+		id := resolution.ReservationID
+		sess.ReservationID = &id
+	}
+
+	if err := rh.sessions.CreateSession(ctx, sess); err != nil {
+		rh.logger.Warn("Failed to record live session",
+			zap.String("subdomain", subdomain),
+			zap.Error(err),
+		)
+		return ""
+	}
+	return sess.ID
 }
 
 // resolve asks the reservation resolver what this registration may bind.
@@ -247,6 +304,7 @@ func (rh *RegistrationHandler) resolve(ctx context.Context, req *RegistrationReq
 // BuildRegistrationResponse creates a protocol registration response.
 func (rh *RegistrationHandler) BuildRegistrationResponse(result *RegistrationResult) (*protocol.RegisterResponse, error) {
 	resp := &protocol.RegisterResponse{
+		SupportsControl:  true,
 		Subdomain:        result.Subdomain,
 		Port:             result.Port,
 		URL:              result.TunnelURL,

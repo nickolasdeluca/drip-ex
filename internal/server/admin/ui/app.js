@@ -330,6 +330,52 @@ function labelled(text, control, grow) {
 
 function portKey(r) { return r.subdomain || ('tcp-' + r.tcp_port); }
 
+// pinControl is the panel's half of the claim flow: the tunnel is already up,
+// so pinning only writes the allocation. The live tunnel keeps the name it
+// registered with, and the client lands on the allocation when it reconnects.
+function pinControl(tunnel) {
+  const isTCP = tunnel.tunnel_type === 'tcp';
+  const button = el('button', { type: 'button', class: 'btn-quiet small', text: t('field.pin') });
+
+  button.addEventListener('click', () => {
+    const group = button.closest('.btn-row') || button;
+    const input = el('input', {
+      class: 'small', value: tunnel.subdomain, size: '14',
+      autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('alloc.subdomain'),
+    });
+    const cancel = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.keep') });
+    const go = el('button', { type: 'button', class: 'btn-quiet small', text: t('field.pin') });
+    const strip = el('span', { class: 'confirm' }, isTCP
+      ? [el('span', { text: t('field.pinTCP', { port: tunnel.tcp_port }) }), cancel, go]
+      : [input, cancel, go]);
+
+    const restore = () => { strip.replaceWith(group); button.focus(); };
+    cancel.addEventListener('click', restore);
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      cancel.disabled = true;
+      go.textContent = t('common.working');
+      try {
+        const pinned = await api('POST', `/api/sessions/${tunnel.session_id}/pin`, {
+          subdomain: isTCP ? '' : input.value.trim(),
+        });
+        // The server tells the client to move when it can; when it cannot,
+        // the allocation still stands and waits for the next reconnect.
+        const key = pinned.rebound
+          ? (pinned.renamed ? 'field.pinnedAsNow' : 'field.pinnedNow')
+          : (pinned.renamed ? 'field.pinnedAs' : 'field.pinned');
+        status(t(key, { name: pinned.subdomain }));
+        await render();
+      } catch (err) { status(err.message, true); restore(); }
+    });
+
+    group.replaceWith(strip);
+    if (isTCP) cancel.focus(); else input.focus();
+  });
+
+  return button;
+}
+
 async function viewField(root) {
   const reservations = state.reservations;
   const tunnels = await api('GET', '/api/tunnels');
@@ -467,6 +513,16 @@ async function viewField(root) {
       { value: el('td', { class: 'right', text: bytes(p.tunnel.bytes_in) }) },
       { value: el('td', { class: 'right', text: bytes(p.tunnel.bytes_out) }) },
       { value: el('td', { text: when(p.tunnel.last_active) }) },
+      {
+        value: el('td', { class: 'right' }, [
+          // Allocated ports are already pinned, and a tunnel with no
+          // credential has no account to pin it to.
+          !p.allocated && p.tunnel.session_id && p.clientId
+            ? el('span', { class: 'btn-row' }, [pinControl(p.tunnel)])
+            : null,
+        ]),
+        when: canEdit(),
+      },
     ])));
 
     root.appendChild(panel(
@@ -479,6 +535,7 @@ async function viewField(root) {
           { value: { label: t('col.in'), right: true } },
           { value: { label: t('col.out'), right: true } },
           { value: t('col.lastActive') },
+          { value: { label: '', right: true }, when: canEdit() },
         ]),
         rows, '', '',
       )],

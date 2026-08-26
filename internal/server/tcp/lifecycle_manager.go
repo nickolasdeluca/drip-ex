@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -37,7 +38,13 @@ type ConnectionLifecycleManager struct {
 	subdomain    string
 	tunnelID     string
 	groupManager *ConnectionGroupManager
+	sessions     SessionRecorder
+	sessionID    string
 }
+
+// sessionDeleteTimeout bounds the teardown write. Close runs on the connection
+// goroutine's way out and must not block on a busy database.
+const sessionDeleteTimeout = 5 * time.Second
 
 // NewConnectionLifecycleManager creates a new lifecycle manager.
 func NewConnectionLifecycleManager(
@@ -106,6 +113,14 @@ func (clm *ConnectionLifecycleManager) SetTunnelRegistration(
 	clm.groupManager = groupManager
 }
 
+// SetSessionRecord sets the live-session row to delete when the tunnel ends.
+func (clm *ConnectionLifecycleManager) SetSessionRecord(sessions SessionRecorder, sessionID string) {
+	clm.mu.Lock()
+	defer clm.mu.Unlock()
+	clm.sessions = sessions
+	clm.sessionID = sessionID
+}
+
 // Close closes the connection and cleans up all resources.
 func (clm *ConnectionLifecycleManager) Close() {
 	clm.once.Do(func() {
@@ -129,6 +144,8 @@ func (clm *ConnectionLifecycleManager) Close() {
 		subdomain := clm.subdomain
 		tunnelID := clm.tunnelID
 		groupManager := clm.groupManager
+		sessions := clm.sessions
+		sessionID := clm.sessionID
 		clm.mu.Unlock()
 
 		if conn != nil {
@@ -153,6 +170,20 @@ func (clm *ConnectionLifecycleManager) Close() {
 
 		if port > 0 && portAlloc != nil {
 			portAlloc.Release(port)
+		}
+
+		// The session row goes first: its subdomain index is unique, so a client
+		// that reconnects the instant the manager frees the name would collide
+		// with its own stale row and land without a pinnable session.
+		if sessions != nil && sessionID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
+			if err := sessions.DeleteSession(ctx, sessionID); err != nil {
+				clm.logger.Warn("Failed to clear live session",
+					zap.String("session_id", sessionID),
+					zap.Error(err),
+				)
+			}
+			cancel()
 		}
 
 		if subdomain != "" && manager != nil {

@@ -28,6 +28,10 @@ const (
 	FrameTypeError          FrameType = 0x06
 	FrameTypeDataConnect    FrameType = 0x07
 	FrameTypeDataConnectAck FrameType = 0x08
+	// FrameTypeRebind tells a connected client which name to register under
+	// next. It travels server to client on the control stream, and the client
+	// reconnects to act on it.
+	FrameTypeRebind FrameType = 0x09
 )
 
 // String returns the string representation of frame type
@@ -49,6 +53,8 @@ func (t FrameType) String() string {
 		return "DataConnect"
 	case FrameTypeDataConnectAck:
 		return "DataConnectAck"
+	case FrameTypeRebind:
+		return "Rebind"
 	default:
 		return fmt.Sprintf("Unknown(%d)", t)
 	}

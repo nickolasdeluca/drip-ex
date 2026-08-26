@@ -444,6 +444,12 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		if verr != nil {
 			logger.Fatal("Failed to read control plane schema version", zap.Error(verr))
 		}
+		// Sessions describe what is live in this process, so anything the last
+		// run left behind is stale the moment this one starts.
+		if perr := controlStore.PurgeSessions(context.Background()); perr != nil {
+			logger.Warn("Failed to clear stale live sessions", zap.Error(perr))
+		}
+
 		logger.Info("Control plane database ready",
 			zap.String("path", cfg.DBPath),
 			zap.Int("schema_version", version),
@@ -524,7 +530,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	httpHandler.SetAllowedTransports(cfg.AllowedTransports)
 	httpHandler.SetAllowedTunnelTypes(cfg.AllowedTunnelTypes)
 
-	listener := tcp.NewListener(tcp.ListenerConfig{
+	listenerCfg := tcp.ListenerConfig{
 		Address:       listenAddr,
 		TLSConfig:     tlsConfig,
 		AuthToken:     cfg.AuthToken,
@@ -537,7 +543,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		TunnelDomain:  cfg.TunnelDomain,
 		PublicPort:    cfg.PublicPort,
 		HTTPHandler:   httpHandler,
-	})
+	}
+	// A typed nil *store.Store in the interface would read as non-nil.
+	if controlStore != nil {
+		listenerCfg.Sessions = controlStore
+	}
+
+	listener := tcp.NewListener(listenerCfg)
 	listener.SetAllowedTransports(cfg.AllowedTransports)
 	listener.SetAllowedTunnelTypes(cfg.AllowedTunnelTypes)
 

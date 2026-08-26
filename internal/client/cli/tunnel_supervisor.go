@@ -139,6 +139,16 @@ func superviseTunnel(ctx context.Context, name string, connConfig *tcp.Connector
 		case <-disconnected:
 			closeTunnelClient(client)
 
+			// A rebind outranks the sticky name: the server moved this tunnel
+			// somewhere else and the reconnect is how it gets there.
+			if target, ok := client.PendingRebind(); ok {
+				connConfig.Subdomain = target
+				logger.Info("Server rebound this tunnel",
+					zap.String("tunnel", name),
+					zap.String("subdomain", target))
+				backoff = superviseMinBackoff
+			}
+
 			wait := jitterBackoff(backoff)
 			logger.Warn("Tunnel connection lost, reconnecting",
 				zap.String("tunnel", name),

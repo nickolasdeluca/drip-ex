@@ -30,6 +30,9 @@ type RegisterRequest struct {
 	IPAccess         *IPAccessControl  `json:"ip_access,omitempty"`
 	ProxyAuth        *ProxyAuth        `json:"proxy_auth,omitempty"`
 	Bandwidth        int64             `json:"bandwidth,omitempty"`
+	// SupportsControl advertises that this client will open a control stream
+	// and act on what the server sends over it.
+	SupportsControl bool `json:"supports_control,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -41,6 +44,20 @@ type RegisterResponse struct {
 	SupportsDataConn bool   `json:"supports_data_conn,omitempty"`
 	RecommendedConns int    `json:"recommended_conns,omitempty"`
 	Bandwidth        int64  `json:"bandwidth,omitempty"`
+	// SupportsControl tells the client the server will accept a control
+	// stream. Old servers leave it false and the client opens nothing.
+	SupportsControl bool `json:"supports_control,omitempty"`
+}
+
+// RebindRequest asks a connected client to register under a different name.
+// The client applies it by reconnecting: the name it holds now was resolved
+// before whatever changed on the server, and only registration can move it.
+//
+// An empty Subdomain means "ask for nothing", which lands the client on
+// whatever reservation the server resolves for it.
+type RebindRequest struct {
+	Subdomain string `json:"subdomain"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type DataConnectRequest struct {

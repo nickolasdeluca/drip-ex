@@ -88,6 +88,12 @@ type PoolClient struct {
 
 	// TLS verification behavior for local HTTPS backends
 	skipLocalTLSVerify bool
+
+	// rebindTo is the name the server asked this client to register under next,
+	// guarded by mu. rebindSet distinguishes "no request" from "ask for
+	// nothing", which are different instructions.
+	rebindTo  string
+	rebindSet bool
 }
 
 // NewPoolClient creates a new pool client.
@@ -253,6 +259,8 @@ func (c *PoolClient) Connect() error {
 		req.Bandwidth = c.bandwidth
 	}
 
+	req.SupportsControl = true
+
 	payload, err := json.Marshal(req)
 	if err != nil {
 		_ = primaryConn.Close()
@@ -335,6 +343,11 @@ func (c *PoolClient) Connect() error {
 
 	c.wg.Add(1)
 	go c.pingLoop(primary)
+
+	if resp.SupportsControl {
+		c.wg.Add(1)
+		go c.controlLoop(primary)
+	}
 
 	if c.tunnelID != "" {
 		c.mu.Lock()

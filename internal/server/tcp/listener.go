@@ -32,7 +32,10 @@ type ListenerConfig struct {
 	// Authenticator resolves registration tokens to control-plane identities.
 	Authenticator *auth.Authenticator
 	// Resolver applies tunnel reservation policy.
-	Resolver     *reservations.Resolver
+	Resolver *reservations.Resolver
+	// Sessions records live tunnels for the admin panel. Nil without a
+	// control plane database.
+	Sessions     SessionRecorder
 	Manager      *tunnel.Manager
 	Logger       *zap.Logger
 	PortAlloc    *PortAllocator
@@ -48,6 +51,7 @@ type Listener struct {
 	authToken     string
 	authenticator *auth.Authenticator
 	resolver      *reservations.Resolver
+	sessions      SessionRecorder
 	manager       *tunnel.Manager
 	portAlloc     *PortAllocator
 	logger        *zap.Logger
@@ -103,6 +107,7 @@ func NewListener(cfg ListenerConfig) *Listener {
 		authToken:     cfg.AuthToken,
 		authenticator: cfg.Authenticator,
 		resolver:      cfg.Resolver,
+		sessions:      cfg.Sessions,
 		manager:       cfg.Manager,
 		portAlloc:     cfg.PortAlloc,
 		logger:        cfg.Logger,
@@ -332,6 +337,7 @@ func (l *Listener) handleConnection(netConn net.Conn) {
 		AuthToken:     l.authToken,
 		Authenticator: l.authenticator,
 		Resolver:      l.resolver,
+		Sessions:      l.sessions,
 		Manager:       l.manager,
 		Logger:        l.logger,
 		PortAlloc:     l.portAlloc,
@@ -487,6 +493,7 @@ func (l *Listener) HandleWSConnection(conn net.Conn, remoteAddr string) {
 		AuthToken:     l.authToken,
 		Authenticator: l.authenticator,
 		Resolver:      l.resolver,
+		Sessions:      l.sessions,
 		Manager:       l.manager,
 		Logger:        l.logger,
 		PortAlloc:     l.portAlloc,

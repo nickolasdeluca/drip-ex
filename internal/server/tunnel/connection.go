@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"crypto/subtle"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,9 @@ type Connection struct {
 	tunnelTypeStr string // cached string for metrics, set once
 	openStream    func() (net.Conn, error)
 	remoteIP      string
+	// control is the stream the client opened for server-initiated messages.
+	// Nil for clients that predate it, so every use must tolerate its absence.
+	control io.ReadWriteCloser
 
 	// Control plane ownership. Empty for legacy shared-token and anonymous
 	// registrations, which have no identity in the database.
@@ -95,6 +99,11 @@ func (c *Connection) Close() {
 
 	close(c.CloseCh)
 	close(c.SendCh)
+
+	if c.control != nil {
+		_ = c.control.Close()
+		c.control = nil
+	}
 
 	if c.Conn != nil {
 		_ = c.Conn.WriteMessage(websocket.CloseMessage,

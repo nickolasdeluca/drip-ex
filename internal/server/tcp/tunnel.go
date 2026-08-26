@@ -40,6 +40,8 @@ func (c *Connection) handleTCPTunnel(reader *bufio.Reader) error {
 		c.lifecycleManager.SetSession(session)
 	}
 
+	go c.acceptControlStreams(session)
+
 	openStream := session.Open
 	if c.groupManager != nil {
 		if group, ok := c.groupManager.GetGroup(c.tunnelID); ok && group != nil {
@@ -100,6 +102,8 @@ func (c *Connection) handleHTTPProxyTunnel(reader *bufio.Reader) error {
 	if c.lifecycleManager != nil {
 		c.lifecycleManager.SetSession(session)
 	}
+
+	go c.acceptControlStreams(session)
 
 	openStream := session.Open
 	if c.groupManager != nil {

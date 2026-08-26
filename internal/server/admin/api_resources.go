@@ -482,21 +482,60 @@ type tunnelView struct {
 	BytesOut          int64     `json:"bytes_out"`
 	ActiveConnections int64     `json:"active_connections"`
 	LastActive        time.Time `json:"last_active"`
+	// SessionID names the control plane row for this tunnel; it is what the
+	// pin endpoint takes. Empty for a tunnel the store never recorded.
+	SessionID     string     `json:"session_id,omitempty"`
+	ReservationID *string    `json:"reservation_id,omitempty"`
+	TCPPort       int        `json:"tcp_port,omitempty"`
+	LocalPort     int        `json:"local_port,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
 }
 
-func (s *Server) handleListTunnels(w http.ResponseWriter, _ *http.Request) {
+// sessionView is a recorded live tunnel, whether or not the manager still
+// holds it.
+type sessionView struct {
+	ID            string    `json:"id"`
+	AccountID     string    `json:"account_id,omitempty"`
+	ClientID      string    `json:"client_id,omitempty"`
+	ReservationID *string   `json:"reservation_id,omitempty"`
+	TunnelType    string    `json:"tunnel_type"`
+	Subdomain     string    `json:"subdomain,omitempty"`
+	TCPPort       int       `json:"tcp_port,omitempty"`
+	LocalPort     int       `json:"local_port,omitempty"`
+	RemoteIP      string    `json:"remote_ip,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+}
+
+func toSessionView(sess *store.Session) sessionView {
+	return sessionView{
+		ID:            sess.ID,
+		AccountID:     sess.AccountID,
+		ClientID:      sess.ClientID,
+		ReservationID: sess.ReservationID,
+		TunnelType:    sess.TunnelType,
+		Subdomain:     sess.Subdomain,
+		TCPPort:       sess.TCPPort,
+		LocalPort:     sess.LocalPort,
+		RemoteIP:      sess.RemoteIP,
+		StartedAt:     sess.StartedAt,
+	}
+}
+
+func (s *Server) handleListTunnels(w http.ResponseWriter, r *http.Request) {
 	out := make([]tunnelView, 0)
 	if s.manager == nil {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
 
+	sessions := s.sessionsBySubdomain(r)
+
 	for _, conn := range s.manager.List() {
 		if conn == nil {
 			continue
 		}
 		clientID, accountID := conn.Owner()
-		out = append(out, tunnelView{
+		view := tunnelView{
 			Subdomain:         conn.Subdomain,
 			TunnelType:        string(conn.GetTunnelType()),
 			ClientID:          clientID,
@@ -505,7 +544,16 @@ func (s *Server) handleListTunnels(w http.ResponseWriter, _ *http.Request) {
 			BytesOut:          conn.GetBytesOut(),
 			ActiveConnections: conn.GetActiveConnections(),
 			LastActive:        conn.LastActive,
-		})
+		}
+		if sess := sessions[conn.Subdomain]; sess != nil {
+			started := sess.StartedAt
+			view.SessionID = sess.ID
+			view.ReservationID = sess.ReservationID
+			view.TCPPort = sess.TCPPort
+			view.LocalPort = sess.LocalPort
+			view.StartedAt = &started
+		}
+		out = append(out, view)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

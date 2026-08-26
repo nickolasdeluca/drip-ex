@@ -67,6 +67,9 @@ type TunnelClient interface {
 	GetLatency() time.Duration
 	GetStats() *stats.TrafficStats
 	IsClosed() bool
+	// PendingRebind reports a name the server asked this client to take on its
+	// next registration, and whether it asked at all.
+	PendingRebind() (string, bool)
 }
 
 func NewTunnelClient(cfg *ConnectorConfig, logger *zap.Logger) TunnelClient {

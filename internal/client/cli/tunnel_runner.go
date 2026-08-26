@@ -192,6 +192,17 @@ func runTunnelWithUI(connConfig *tcp.ConnectorConfig, daemonInfo *DaemonInfo) er
 			close(stopDisplay)
 			fmt.Println()
 			fmt.Println(ui.RenderConnectionLost())
+
+			// A rebind outranks the sticky name: the server moved this tunnel
+			// somewhere else and the reconnect is how it gets there.
+			if name, ok := connector.PendingRebind(); ok {
+				connConfig.Subdomain = name
+				if daemonInfo != nil {
+					daemonInfo.Subdomain = name
+				}
+				reconnectAttempts = 0
+			}
+
 			reconnectAttempts++
 			if reconnectAttempts >= maxReconnectAttempts {
 				return fmt.Errorf("connection lost after %d reconnect attempts", maxReconnectAttempts)

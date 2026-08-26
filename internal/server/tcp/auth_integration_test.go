@@ -60,6 +60,7 @@ func newTestServer(t *testing.T, requireAuth, reservationsOnly bool) *authTestSe
 		Address:       "127.0.0.1:0",
 		Authenticator: authenticator,
 		Resolver:      reservations.New(s, reservationsOnly, logger),
+		Sessions:      s,
 		Manager:       manager,
 		Logger:        logger,
 		PortAlloc:     portAlloc,

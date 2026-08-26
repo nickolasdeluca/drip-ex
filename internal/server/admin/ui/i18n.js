@@ -77,6 +77,12 @@ const STRINGS = {
     'field.detail': 'Linked detail',
     'field.tagLegend': 'Tag legend',
     'field.unauthenticated': 'unauthenticated',
+    'field.pin': 'Pin',
+    'field.pinTCP': 'Allocate tcp {port} to this machine?',
+    'field.pinned': 'Allocated. The tunnel keeps this name from its next reconnect on.',
+    'field.pinnedAs': 'Allocated as {name}. The tunnel moves there on its next reconnect.',
+    'field.pinnedNow': 'Allocated. The tunnel is reconnecting onto it now.',
+    'field.pinnedAsNow': 'Allocated as {name}. The tunnel is reconnecting onto it now.',
 
     'col.port': 'Port',
     'col.type': 'Type',
@@ -167,6 +173,9 @@ const STRINGS = {
     'err.account name is required': 'account name is required',
     'err.client name is required': 'client name is required',
     'err.a subdomain is required for http reservations': 'a subdomain is required for http reservations',
+    'err.this tunnel already bound a reservation': 'this tunnel already bound a reservation',
+    'err.a tcp tunnel reserves its port, not a name': 'a tcp tunnel reserves its port, not a name',
+    'err.this tunnel registered without a client credential; issue one for this machine and reconnect before pinning': 'this tunnel registered without a client credential; issue one for this machine and reconnect before pinning',
   },
 
   'pt-BR': {
@@ -237,6 +246,12 @@ const STRINGS = {
     'field.detail': 'Detalhe do link',
     'field.tagLegend': 'Legenda das cores',
     'field.unauthenticated': 'sem autenticação',
+    'field.pin': 'Fixar',
+    'field.pinTCP': 'Alocar tcp {port} para esta máquina?',
+    'field.pinned': 'Alocado. O túnel mantém este nome a partir da próxima reconexão.',
+    'field.pinnedAs': 'Alocado como {name}. O túnel passa para lá na próxima reconexão.',
+    'field.pinnedNow': 'Alocado. O túnel está reconectando nele agora.',
+    'field.pinnedAsNow': 'Alocado como {name}. O túnel está reconectando nele agora.',
 
     'col.port': 'Porta',
     'col.type': 'Tipo',
@@ -327,6 +342,9 @@ const STRINGS = {
     'err.account name is required': 'o nome da conta é obrigatório',
     'err.client name is required': 'o nome da máquina é obrigatório',
     'err.a subdomain is required for http reservations': 'reservas http exigem um subdomínio',
+    'err.this tunnel already bound a reservation': 'este túnel já vinculou uma alocação',
+    'err.a tcp tunnel reserves its port, not a name': 'um túnel tcp reserva a porta, não um nome',
+    'err.this tunnel registered without a client credential; issue one for this machine and reconnect before pinning': 'este túnel conectou sem credencial de cliente; emita uma para esta máquina e reconecte antes de fixar',
   },
 };
 
