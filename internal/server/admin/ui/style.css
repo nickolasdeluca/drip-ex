@@ -35,6 +35,8 @@
   --tag-7: #d6c23d;
   --tag-8: #4bb5bd;
 
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23848c94' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
   --pitch: 4px;
   --radius: 3px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -51,6 +53,8 @@
     --ink: #1c1f22;
     --ink-dim: #565d63;
     --ink-faint: #767d84;
+
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23565d63' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
     --strip: #fbfaf6;
     --strip-ink: #16181a;
@@ -174,10 +178,12 @@ h2 { font-size: 17px; letter-spacing: -0.01em; margin: 0; font-weight: 600; }
 .lang-slot { display: inline-flex; }
 
 select.lang {
-  background: transparent;
+  appearance: none;
+  background: transparent var(--chevron) no-repeat right 8px center;
+  background-size: 9px 5px;
   border: 1px solid var(--rule);
   border-radius: var(--radius);
-  padding: 4px 8px;
+  padding: 4px 24px 4px 8px;
   font-size: 11px;
   letter-spacing: 0.08em;
   color: var(--ink-dim);
@@ -443,6 +449,24 @@ button, input, select { font: inherit; color: var(--ink); }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field.grow { flex: 1 1 11rem; min-width: 0; }
+
+/* Chrome forces line-height: normal on a select, so an input and a select with
+   identical padding still end up a few pixels apart. A row of controls that
+   disagree by two pixels reads as a defect, so both are pinned to one box and
+   let their own vertical centring do the rest. */
+.field input, .field select { height: 38px; padding-block: 0; }
+
+/* The native arrow sits hard against the right edge and no padding moves it, so
+   the control draws its own chevron and clears room for it. The glyph is a
+   background image, which cannot take currentColor — hence one URI per theme. */
+.field select {
+  appearance: none;
+  padding-right: 30px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 10px 6px;
+}
 
 input, select {
   background: var(--plate-sunk);
