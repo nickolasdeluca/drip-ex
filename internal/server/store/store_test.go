@@ -178,3 +178,30 @@ func TestGetClientNotFound(t *testing.T) {
 		t.Fatalf("GetClient() error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestUpdateClientRejectsABlankName(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	acct, err := s.CreateAccount(ctx, "acme", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	client := testClient(acct.ID, "laptop", "hash")
+	if err := s.CreateClient(ctx, client); err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+
+	client.Name = "   "
+	if err := s.UpdateClient(ctx, client); err == nil {
+		t.Fatal("UpdateClient() with a blank name error = nil, want an error")
+	}
+
+	got, err := s.GetClient(ctx, client.ID)
+	if err != nil {
+		t.Fatalf("GetClient() error = %v", err)
+	}
+	if got.Name != "laptop" {
+		t.Fatalf("Name = %q, want laptop", got.Name)
+	}
+}

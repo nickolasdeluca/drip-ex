@@ -93,6 +93,10 @@ func (s *Store) UpdateClient(ctx context.Context, c *Client) error {
 	if c == nil || c.ID == "" {
 		return fmt.Errorf("client ID is required")
 	}
+	c.Name = strings.TrimSpace(c.Name)
+	if c.Name == "" {
+		return fmt.Errorf("client name is required")
+	}
 
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE clients SET name = ?, enabled = ?, bandwidth = ?, updated_at = ?
