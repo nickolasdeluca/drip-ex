@@ -74,6 +74,7 @@ msg() {
       done) echo "卸载完成" ;;
       remove_config) echo "删除配置目录？" ;;
       remove_data) echo "删除数据/日志目录？" ;;
+      remove_data_warn) echo "这将删除控制平面数据库：账户、客户端凭证以及全部分配。" ;;
       no_binary) echo "未发现可执行文件，跳过二进制删除" ;;
       stop_service) echo "停止并禁用 systemd 服务..." ;;
       remove_service) echo "删除 systemd 服务文件..." ;;
@@ -100,6 +101,7 @@ msg() {
       done) echo "Uninstall completed" ;;
       remove_config) echo "Remove config directory as well?" ;;
       remove_data) echo "Remove data/log directory as well?" ;;
+      remove_data_warn) echo "This deletes the control plane database: accounts, client credentials and every allocation." ;;
       no_binary) echo "No binary found, skipping binary removal" ;;
       stop_service) echo "Stopping and disabling systemd service..." ;;
       remove_service) echo "Removing systemd service file..." ;;
@@ -382,6 +384,12 @@ remove_server() {
     say_ok "Server config removed"
   else
     say_info "$(msg skip)"
+  fi
+
+  # A managed deployment keeps its accounts, credentials and allocations here,
+  # and none of it can be recreated from the binary or the config file.
+  if [[ -f /var/lib/drip/control.db ]]; then
+    say_warn "$(msg remove_data_warn)"
   fi
 
   if [[ "$(prompt_yes "$(msg remove_data)" true)" == "y" ]]; then

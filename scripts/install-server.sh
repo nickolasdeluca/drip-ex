@@ -23,6 +23,15 @@ DOWNLOADED_BINARY=""
 DEFAULT_PORT=8443
 DEFAULT_TCP_PORT_MIN=20000
 DEFAULT_TCP_PORT_MAX=40000
+DEFAULT_ADMIN_ADDRESS="127.0.0.1:8444"
+
+# Managed mode: SQLite control plane, per-client credentials and the admin
+# panel. Set here so a non-interactive path still has defined values.
+MANAGED=false
+DB_PATH=""
+ADMIN_ADDRESS=""
+ADMIN_PUBLIC=false
+RESERVATIONS_ONLY=false
 
 # Colors
 RED='\033[0;31m'
@@ -68,6 +77,23 @@ MSG_EN=(
     ["enter_port"]="Enter server port"
     ["enter_token"]="Enter authentication token (leave empty to auto-generate)"
     ["token_generated"]="Authentication token generated"
+    ["managed_title"]="Managed mode"
+    ["managed_note"]="Managed mode stores per-client credentials, pinned subdomains and TCP ports in SQLite, and serves an admin panel to manage them. Without it the server accepts one shared token and hands out random subdomains."
+    ["managed_q"]="Enable managed mode?"
+    ["enter_admin_address"]="Admin panel listen address"
+    ["admin_local_note"]="The panel stays on loopback: first-run setup is unauthenticated by necessity, so reach it over an SSH tunnel."
+    ["admin_public_q"]="Also publish the panel on https://DOMAIN (first-run setup stays loopback-only)?"
+    ["reservations_only_q"]="Refuse tunnels that have no allocation (closed fleet)?"
+    ["reservations_only_note"]="Every client then needs an allocation created in the panel before it can connect."
+    ["legacy_token_q"]="Also accept a shared token, for clients without credentials?"
+    ["legacy_token_note"]="A client connecting with the shared token has no identity, so it can never bind an allocation."
+    ["managed_ready"]="Managed mode configured"
+    ["panel_title"]="Admin panel"
+    ["panel_tunnel"]="From your workstation"
+    ["panel_open"]="Then open"
+    ["panel_first_run"]="The first visit creates the administrator account."
+    ["panel_next"]="In the panel: create an account, issue a client credential, then allocate a subdomain for it."
+    ["no_shared_token"]="No shared token: clients authenticate with credentials issued in the panel."
     ["metrics_token_generated"]="Metrics token generated"
     ["enter_cert_path"]="Enter TLS certificate path (public key)"
     ["enter_key_path"]="Enter TLS private key path"
@@ -167,6 +193,23 @@ MSG_ZH=(
     ["domain_required"]="域名是必填项"
     ["enter_port"]="输入服务器端口"
     ["enter_token"]="输入认证令牌（留空自动生成）"
+    ["managed_title"]="托管模式"
+    ["managed_note"]="托管模式将每个客户端的凭证、固定子域名和 TCP 端口存入 SQLite，并提供管理面板。不启用时，服务器只接受一个共享令牌并分配随机子域名。"
+    ["managed_q"]="启用托管模式？"
+    ["enter_admin_address"]="管理面板监听地址"
+    ["admin_local_note"]="面板保持在回环地址：首次设置无法要求认证，请通过 SSH 隧道访问。"
+    ["admin_public_q"]="同时在 https://DOMAIN 上发布面板（首次设置仍仅限回环）？"
+    ["reservations_only_q"]="拒绝没有分配的隧道（封闭集群）？"
+    ["reservations_only_note"]="此后每个客户端都必须先在面板中创建分配才能连接。"
+    ["legacy_token_q"]="同时接受共享令牌，用于没有凭证的客户端？"
+    ["legacy_token_note"]="使用共享令牌连接的客户端没有身份，因此永远无法绑定分配。"
+    ["managed_ready"]="托管模式已配置"
+    ["panel_title"]="管理面板"
+    ["panel_tunnel"]="在你的工作站上执行"
+    ["panel_open"]="然后打开"
+    ["panel_first_run"]="首次访问会创建管理员账户。"
+    ["panel_next"]="在面板中：创建账户、签发客户端凭证，然后为其分配子域名。"
+    ["no_shared_token"]="没有共享令牌：客户端使用面板签发的凭证进行认证。"
     ["token_generated"]="认证令牌已生成"
     ["metrics_token_generated"]="监控令牌已生成"
     ["enter_cert_path"]="输入 TLS 证书路径（公钥）"
@@ -717,12 +760,29 @@ configure_server() {
     read -p "$(msg enter_tcp_max) [$DEFAULT_TCP_PORT_MAX]: " TCP_PORT_MAX < /dev/tty
     TCP_PORT_MAX="${TCP_PORT_MAX:-$DEFAULT_TCP_PORT_MAX}"
 
-    # Authentication token (user can provide or auto-generate)
+    # Managed mode: the control plane, the admin panel and per-client
+    # credentials. Without it the server is the upstream single-token one.
     echo ""
-    read -p "$(msg enter_token): " TOKEN < /dev/tty
-    if [[ -z "$TOKEN" ]]; then
-        TOKEN=$(generate_token)
-        print_success "$(msg token_generated): $TOKEN"
+    print_subheader "$(msg managed_title)"
+    print_info "$(msg managed_note)"
+    echo ""
+    read -p "$(msg managed_q) [Y/n]: " managed_choice < /dev/tty
+    if [[ "$managed_choice" =~ ^[Nn]$ ]]; then
+        MANAGED=false
+    else
+        MANAGED=true
+    fi
+
+    if [[ "$MANAGED" == true ]]; then
+        configure_managed_mode
+    else
+        # Authentication token (user can provide or auto-generate)
+        echo ""
+        read -p "$(msg enter_token): " TOKEN < /dev/tty
+        if [[ -z "$TOKEN" ]]; then
+            TOKEN=$(generate_token)
+            print_success "$(msg token_generated): $TOKEN"
+        fi
     fi
 
     # Metrics token (always auto-generated)
@@ -778,6 +838,48 @@ configure_server() {
             read -p "$(msg enter_email): " CERTBOT_EMAIL < /dev/tty
             ;;
     esac
+}
+
+# configure_managed_mode asks the questions that only apply to a deployment with
+# a control plane behind it.
+configure_managed_mode() {
+    DB_PATH="${WORK_DIR}/control.db"
+
+    echo ""
+    print_info "$(msg admin_local_note)"
+    read -p "$(msg enter_admin_address) [$DEFAULT_ADMIN_ADDRESS]: " ADMIN_ADDRESS < /dev/tty
+    ADMIN_ADDRESS="${ADMIN_ADDRESS:-$DEFAULT_ADMIN_ADDRESS}"
+
+    echo ""
+    read -p "$(msg admin_public_q) [y/N]: " admin_public_choice < /dev/tty
+    if [[ "$admin_public_choice" =~ ^[Yy]$ ]]; then
+        ADMIN_PUBLIC=true
+    fi
+
+    echo ""
+    print_info "$(msg reservations_only_note)"
+    read -p "$(msg reservations_only_q) [y/N]: " reservations_choice < /dev/tty
+    if [[ "$reservations_choice" =~ ^[Yy]$ ]]; then
+        RESERVATIONS_ONLY=true
+    fi
+
+    # A shared token is the thing managed mode exists to replace: a client
+    # holding one registers with no identity, so it can never bind an
+    # allocation. Offer it only for clients that cannot be reissued yet.
+    echo ""
+    print_warning "$(msg legacy_token_note)"
+    read -p "$(msg legacy_token_q) [y/N]: " legacy_choice < /dev/tty
+    if [[ "$legacy_choice" =~ ^[Yy]$ ]]; then
+        read -p "$(msg enter_token): " TOKEN < /dev/tty
+        if [[ -z "$TOKEN" ]]; then
+            TOKEN=$(generate_token)
+            print_success "$(msg token_generated): $TOKEN"
+        fi
+    else
+        TOKEN=""
+    fi
+
+    print_success "$(msg managed_ready)"
 }
 
 # ============================================================================
@@ -1136,8 +1238,45 @@ public_port: ${PUBLIC_PORT}
 domain: ${DOMAIN}
 
 # Authentication
-token: ${TOKEN}
 metrics_token: ${METRICS_TOKEN}
+EOF
+
+    # A shared token is written only when there is one: an empty value would
+    # read as "no authentication configured" rather than "credentials only".
+    if [[ -n "$TOKEN" ]]; then
+        cat >> "$CONFIG_DIR/config.yaml" << EOF
+token: ${TOKEN}
+EOF
+    fi
+
+    if [[ "$MANAGED" == true ]]; then
+        cat >> "$CONFIG_DIR/config.yaml" << EOF
+
+# Control plane: accounts, client credentials and allocations
+db_path: ${DB_PATH}
+require_auth: true
+
+# Admin panel. The panel keeps this listener even when published on the
+# server domain, because first-run setup is served here and nowhere else.
+admin_address: ${ADMIN_ADDRESS}
+EOF
+
+        if [[ "$ADMIN_PUBLIC" == true ]]; then
+            cat >> "$CONFIG_DIR/config.yaml" << EOF
+admin_public: true
+EOF
+        fi
+
+        if [[ "$RESERVATIONS_ONLY" == true ]]; then
+            cat >> "$CONFIG_DIR/config.yaml" << EOF
+
+# Closed fleet: every tunnel must bind an allocation
+reservations_only: true
+EOF
+        fi
+    fi
+
+    cat >> "$CONFIG_DIR/config.yaml" << EOF
 
 # TLS certificate paths
 tls_cert: ${CERT_PATH}
@@ -1188,9 +1327,17 @@ show_completion() {
 
     echo -e "${CYAN}$(msg client_info):${NC}"
     echo -e "  ${BOLD}$(msg server_addr):${NC}        ${DOMAIN}:${PORT}"
-    echo -e "  ${BOLD}$(msg token_label):${NC}      ${TOKEN}"
+    if [[ -n "$TOKEN" ]]; then
+        echo -e "  ${BOLD}$(msg token_label):${NC}      ${TOKEN}"
+    else
+        echo -e "  ${BOLD}$(msg token_label):${NC}      $(msg no_shared_token)"
+    fi
     echo -e "  ${BOLD}$(msg metrics_token_label):${NC} ${METRICS_TOKEN}"
     echo ""
+
+    if [[ "$MANAGED" == true ]]; then
+        show_panel_access
+    fi
 
     echo -e "${CYAN}$(msg service_commands):${NC}"
     echo -e "  ${GREEN}$(msg cmd_start):${NC}    systemctl start drip-server"
@@ -1199,6 +1346,24 @@ show_completion() {
     echo -e "  ${GREEN}$(msg cmd_status):${NC}   systemctl status drip-server"
     echo -e "  ${GREEN}$(msg cmd_logs):${NC}     journalctl -u drip-server -f"
     echo -e "  ${GREEN}$(msg cmd_enable):${NC}   systemctl enable drip-server"
+    echo ""
+}
+
+# show_panel_access explains how to reach a panel that is deliberately not
+# published: first-run setup cannot ask for credentials that do not exist yet,
+# so it is served on loopback only.
+show_panel_access() {
+    local admin_port="${ADMIN_ADDRESS##*:}"
+
+    echo -e "${CYAN}$(msg panel_title):${NC}"
+    if [[ "$ADMIN_PUBLIC" == true ]]; then
+        echo -e "  ${GREEN}https://${DOMAIN}${NC}"
+    fi
+    echo -e "  ${BOLD}$(msg panel_tunnel):${NC} ssh -L ${admin_port}:${ADMIN_ADDRESS} youruser@${DOMAIN}"
+    echo -e "  ${BOLD}$(msg panel_open):${NC}   http://127.0.0.1:${admin_port}"
+    echo ""
+    echo -e "  $(msg panel_first_run)"
+    echo -e "  $(msg panel_next)"
     echo ""
 }
 

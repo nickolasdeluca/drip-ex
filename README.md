@@ -382,7 +382,12 @@ drip server \
 
 Every server flag has an environment variable (`DRIP_DOMAIN`, `DRIP_PORT`,
 `DRIP_DB_PATH`, `DRIP_TLS_MODE`, …); run `drip server --help` for the full list.
-`scripts/install-server.sh` installs the binary and a systemd unit for you.
+`scripts/install-server.sh` installs the binary and a systemd unit for you, and
+offers **managed mode** during setup: it writes `db_path`, `require_auth` and
+`admin_address`, and can also publish the panel (`admin_public`) or close the
+fleet (`reservations_only`). Managed mode writes no shared token unless you ask
+for one — a client using a shared token has no identity, so it can never bind an
+allocation. Declining managed mode keeps the upstream single-token server.
 
 ---
 

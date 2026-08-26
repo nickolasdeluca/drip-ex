@@ -358,6 +358,17 @@ a change to the client only reaches users after a tagged release.
 is called — `install-client.sh` builds that file name literally, and the
 PowerShell installer matches on the platform and architecture within it.
 
+`install-server.sh` offers managed mode at setup: it writes `db_path`,
+`require_auth` and `admin_address`, optionally `admin_public` and
+`reservations_only`, and **omits `token:` unless the operator opts into a shared
+token**. That default is the point — a client on a shared token registers with no
+account, so it can never bind a reservation, and a server installed with one
+silently cannot use the panel it just installed. The panel stays on loopback
+because first-run setup is unauthenticated by necessity; the installer prints the
+SSH tunnel to reach it. `uninstall.sh` warns before removing `/var/lib/drip` when
+a control plane database is there — accounts, credentials and allocations cannot
+be recreated from the config.
+
 All four verify the SHA-256 from `drip_<version>_checksums.txt` before installing
 and **fail closed**: a missing checksum file, an archive the file does not list,
 or a mismatch aborts. Keep it that way — these scripts run as root off a piped
