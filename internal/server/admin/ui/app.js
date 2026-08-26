@@ -165,6 +165,24 @@ function connectCommand(token, localPort) {
   return `drip http ${localPort || 8080} --server ${server} --token ${token}`;
 }
 
+// tcpPortInput carries the server's allocation range into the control, so an
+// operator is stopped by the field rather than by a registration that fails
+// hours later on the machine. A deployment that did not report a range gets the
+// plain 1-65535 bounds.
+function tcpPortInput() {
+  const s = state.server || {};
+  const attrs = {
+    name: 'tcp_port', type: 'number',
+    min: String(s.tcp_port_min || 1),
+    max: String(s.tcp_port_max || 65535),
+    placeholder: String(s.tcp_port_min || 20050),
+  };
+  if (s.tcp_port_min && s.tcp_port_max) {
+    attrs.title = t('alloc.tcpRange', { min: s.tcp_port_min, max: s.tcp_port_max });
+  }
+  return el('input', attrs);
+}
+
 // reservationFor finds the allocation a credential is bound to, if any.
 function reservationFor(clientId) {
   return (state.reservations || []).find(r => r.client_id === clientId) || null;
@@ -582,7 +600,7 @@ async function viewReservations(root) {
         accountField('account_id'),
         labelled(t('col.machine'), clientSelect('client_id')),
         labelled(t('alloc.subdomain'), el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' }), true),
-        labelled(t('alloc.tcpPort'), el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' })),
+        labelled(t('alloc.tcpPort'), tcpPortInput()),
         labelled(t('col.bandwidth'), el('input', { name: 'bandwidth', placeholder: '1M' })),
       ], t('alloc.submit'), async (data) => {
         const port = parseInt(data.get('tcp_port'), 10);
@@ -862,7 +880,7 @@ function buildForm() {
   const localPort = el('input', { name: 'local_port', type: 'number', min: '1', max: '65535', placeholder: '8080', required: true });
   const subdomain = el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' });
   const subdomainField = labelled(t('alloc.subdomain'), subdomain, true);
-  const tcpPort = el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' });
+  const tcpPort = tcpPortInput();
   const tcpPortField = labelled(t('build.tcpPort'), tcpPort);
   const tunnelName = el('input', { name: 'tunnel_name', placeholder: t('build.namePlaceholder'), autocapitalize: 'off', spellcheck: 'false' });
   const autostart = el('input', { type: 'checkbox', name: 'autostart' });

@@ -64,6 +64,12 @@ type Deployment struct {
 	PublicPort int
 	// TLS reports whether clients connect over TLS.
 	TLS bool
+	// TCPPortMin and TCPPortMax bound the ports a TCP tunnel can be given.
+	// Reserving a port outside them would be accepted here and refused at
+	// registration, so the panel checks against them. Both zero means the
+	// deployment did not say, and the check is skipped rather than guessed.
+	TCPPortMin int
+	TCPPortMax int
 }
 
 // Server is the admin panel HTTP server.

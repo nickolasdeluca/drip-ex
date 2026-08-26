@@ -504,6 +504,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 				TunnelDomain: cfg.TunnelDomain,
 				PublicPort:   cfg.PublicPort,
 				TLS:          tlsConfig != nil,
+				TCPPortMin:   cfg.TCPPortMin,
+				TCPPortMax:   cfg.TCPPortMax,
 			},
 			Logger: logger,
 		})
