@@ -59,7 +59,7 @@ func runService(opts serviceRunOptions) error {
 	if err := utils.InitFileLogger(opts.logPath, opts.verbose); err != nil {
 		return err
 	}
-	defer utils.Sync()
+	defer func() { _ = utils.CloseFileLogger() }()
 
 	handler := &dripService{opts: opts, logger: utils.GetLogger()}
 
