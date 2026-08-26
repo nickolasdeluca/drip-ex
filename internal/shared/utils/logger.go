@@ -9,7 +9,13 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var logger *zap.Logger
+var (
+	logger *zap.Logger
+	// logFile is the sink InitFileLogger opened, kept so it can be closed.
+	// Windows refuses to delete or replace a file another handle still holds,
+	// so leaving it open outlives the process's usefulness for it.
+	logFile *os.File
+)
 
 // InitLogger initializes the global logger for client
 // verbose: if true, shows debug level logs; if false, shows error level only
@@ -141,12 +147,35 @@ func InitFileLogger(path string, verbose bool) error {
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
+	// Replacing an earlier file logger must not leak its handle.
+	closeLogFile()
+	logFile = file
+
 	sink := zapcore.Lock(zapcore.AddSync(file))
 	logger = zap.New(
 		zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), sink, level),
 		zap.ErrorOutput(sink),
 	)
 
+	return nil
+}
+
+// CloseFileLogger flushes and closes the file a previous InitFileLogger opened.
+// Callers that keep running afterwards fall back to the default logger.
+func CloseFileLogger() error {
+	Sync()
+	return closeLogFile()
+}
+
+func closeLogFile() error {
+	if logFile == nil {
+		return nil
+	}
+	err := logFile.Close()
+	logFile = nil
+	if err != nil {
+		return fmt.Errorf("failed to close the log file: %w", err)
+	}
 	return nil
 }
 
