@@ -147,8 +147,9 @@ func InitFileLogger(path string, verbose bool) error {
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	// Replacing an earlier file logger must not leak its handle.
-	closeLogFile()
+	// Replacing an earlier file logger must not leak its handle. A close error
+	// on the outgoing file is not worth failing the new logger for.
+	_ = closeLogFile()
 	logFile = file
 
 	sink := zapcore.Lock(zapcore.AddSync(file))
