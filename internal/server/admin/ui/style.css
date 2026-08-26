@@ -609,3 +609,43 @@ form.bench .btn { margin-bottom: 1px; }
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+
+/* ---- patch-in builder --------------------------------------------------- */
+
+/* A checkbox is the one control that reads left to right, not top to bottom. */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.check input { width: 15px; height: 15px; accent-color: var(--link); }
+.check .legend { cursor: pointer; }
+
+.platform-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.platform-tabs .active {
+  color: var(--ink);
+  border-color: var(--link);
+}
+
+/* The script keeps its own line breaks: a wrapped command is a command that
+   gets pasted wrong. It scrolls sideways instead. */
+.script {
+  background: var(--strip);
+  color: var(--strip-ink);
+  border-radius: 1px;
+  padding: 14px 16px;
+  margin: 0 0 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre;
+}
+.script-actions { justify-content: flex-start; margin-bottom: 10px; }
+.script-pane .note { margin-bottom: 10px; }

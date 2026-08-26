@@ -93,6 +93,8 @@ const state = {
   accounts: [],
   clients: [],
   reservations: [],
+  build: null,         // the last command the builder produced, if any
+  buildPlatform: 'linux',
   linked: new Set(),   // subdomains lit at last render, for the energize moment
   seenLink: false,
   needsSetup: false,
@@ -168,8 +170,8 @@ function reservationFor(clientId) {
   return (state.reservations || []).find(r => r.client_id === clientId) || null;
 }
 
-// copyable renders a monospace strip with a copy button beside it.
-function copyable(value, label) {
+// copyButton puts a value on the clipboard and says so where it was clicked.
+function copyButton(value) {
   const button = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.copy') });
   button.addEventListener('click', async () => {
     try {
@@ -180,6 +182,12 @@ function copyable(value, label) {
       status(t('common.copyFailed'), true);
     }
   });
+  return button;
+}
+
+// copyable renders a monospace strip with a copy button beside it.
+function copyable(value, label) {
+  const button = copyButton(value);
   return el('div', { class: 'copyable' }, [
     label ? el('span', { class: 'legend', text: label }) : null,
     el('div', { class: 'copyable-row' }, [
@@ -805,6 +813,211 @@ async function viewAudit(root) {
   ));
 }
 
+// ---- patch in ------------------------------------------------------------
+
+// The builder writes the second half of a two-step deployment: the operator
+// installs the binary however that fleet installs binaries, then pastes this.
+// Pressing Build is what allocates the name, so the command is never previewed
+// on a keystroke the way a purely cosmetic builder could be.
+
+const NEW_CREDENTIAL = '__new__';
+const PLATFORMS = ['linux', 'macos', 'windows'];
+
+function scriptFile(platform) {
+  return platform === 'windows' ? 'drip-setup.ps1' : 'drip-setup.sh';
+}
+
+// downloadButton hands over the script as a file, for a host where pasting a
+// multi-line command into a terminal is the awkward part.
+function downloadButton(filename, text) {
+  const button = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.download') });
+  button.addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    const link = el('a', { href: url, download: filename });
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  });
+  return button;
+}
+
+function checkbox(text, input) {
+  return el('label', { class: 'check' }, [input, el('span', { class: 'legend', text })]);
+}
+
+function buildForm() {
+  const machine = el('select', { name: 'client_id' });
+  for (const c of state.clients) machine.appendChild(el('option', { value: c.id, text: c.name }));
+  machine.appendChild(el('option', { value: NEW_CREDENTIAL, text: t('build.newCredential') }));
+
+  const newName = el('input', { name: 'new_name', placeholder: 'win-svc-01', autocapitalize: 'off', spellcheck: 'false' });
+  const newNameField = labelled(t('build.machineName'), newName, true);
+  const account = accountField('account_id');
+
+  const type = el('select', { name: 'tunnel_type' });
+  for (const value of ['http', 'https', 'tcp']) type.appendChild(el('option', { value, text: value }));
+
+  const localAddress = el('input', { name: 'local_address', placeholder: '127.0.0.1', autocapitalize: 'off', spellcheck: 'false' });
+  const localPort = el('input', { name: 'local_port', type: 'number', min: '1', max: '65535', placeholder: '8080', required: true });
+  const subdomain = el('input', { name: 'subdomain', placeholder: 'billing', autocapitalize: 'off', spellcheck: 'false' });
+  const subdomainField = labelled(t('alloc.subdomain'), subdomain, true);
+  const tcpPort = el('input', { name: 'tcp_port', type: 'number', min: '1', max: '65535', placeholder: '20050' });
+  const tcpPortField = labelled(t('build.tcpPort'), tcpPort);
+  const tunnelName = el('input', { name: 'tunnel_name', placeholder: t('build.namePlaceholder'), autocapitalize: 'off', spellcheck: 'false' });
+  const autostart = el('input', { type: 'checkbox', name: 'autostart' });
+
+  const submit = el('button', { type: 'submit', class: 'btn', text: t('build.submit') });
+  submit.dataset.label = t('build.submit');
+
+  const form = el('form', { class: 'bench' }, [
+    labelled(t('col.machine'), machine),
+    newNameField,
+    account,
+    labelled(t('col.type'), type),
+    labelled(t('build.localAddress'), localAddress),
+    labelled(t('build.localPort'), localPort),
+    subdomainField,
+    tcpPortField,
+    labelled(t('build.tunnelName'), tunnelName, true),
+    checkbox(t('build.autostart'), autostart),
+    submit,
+  ]);
+
+  // The credential decides whether an account has to be picked, and the tunnel
+  // type decides whether the allocation is a name or a port.
+  const sync = () => {
+    const fresh = machine.value === NEW_CREDENTIAL;
+    newNameField.hidden = !fresh;
+    newName.required = fresh;
+    if (account.classList.contains('field')) account.hidden = !fresh;
+    const isTCP = type.value === 'tcp';
+    subdomainField.hidden = isTCP;
+    tcpPortField.hidden = !isTCP;
+  };
+  machine.addEventListener('change', sync);
+  type.addEventListener('change', sync);
+  if (!state.clients.length) machine.value = NEW_CREDENTIAL;
+  sync();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fresh = machine.value === NEW_CREDENTIAL;
+    const body = {
+      tunnel_type: type.value,
+      local_port: parseInt(localPort.value, 10) || 0,
+      local_address: localAddress.value.trim(),
+      tunnel_name: tunnelName.value.trim(),
+      autostart: autostart.checked,
+    };
+    if (fresh) {
+      body.new_client = {
+        account_id: account.classList.contains('field') ? account.querySelector('select').value : account.value,
+        name: newName.value.trim(),
+        bandwidth: '',
+      };
+    } else {
+      body.client_id = machine.value;
+    }
+    if (type.value === 'tcp') body.tcp_port = parseInt(tcpPort.value, 10) || 0;
+    else body.subdomain = subdomain.value.trim();
+
+    submitting(form, true);
+    try {
+      state.build = await api('POST', '/api/provision', body);
+      state.buildPlatform = 'linux';
+      await render();
+    } catch (err) {
+      status(err.message, true);
+      submitting(form, false);
+    }
+  });
+
+  return form;
+}
+
+function buildResult(build) {
+  const body = [];
+
+  const tabs = el('div', { class: 'platform-tabs' });
+  const scripts = el('div');
+  const panes = new Map();
+
+  const show = (platform) => {
+    state.buildPlatform = platform;
+    for (const [key, pane] of panes) pane.hidden = key !== platform;
+    for (const button of tabs.children) button.classList.toggle('active', button.dataset.platform === platform);
+  };
+
+  for (const platform of PLATFORMS) {
+    const command = (build.commands || []).find(c => c.platform === platform);
+    if (!command) continue;
+
+    const pane = el('div', { class: 'script-pane' }, [
+      el('pre', { class: 'script' }, [el('code', { text: command.script })]),
+      el('div', { class: 'btn-row script-actions' }, [
+        copyButton(command.script),
+        downloadButton(scriptFile(platform), command.script),
+      ]),
+      command.elevated ? el('p', { class: 'note', text: t('build.elevated') }) : null,
+    ]);
+    panes.set(platform, pane);
+    scripts.appendChild(pane);
+
+    const tab = el('button', {
+      type: 'button', class: 'btn-quiet small', text: t('build.platform.' + platform),
+      onclick: () => show(platform),
+    });
+    tab.dataset.platform = platform;
+    tabs.appendChild(tab);
+  }
+
+  body.push(tabs, scripts);
+  show(panes.has(state.buildPlatform) ? state.buildPlatform : PLATFORMS[0]);
+
+  if (build.token) {
+    body.push(el('p', { class: 'note', text: t('build.tokenIssued') }));
+    body.push(copyable(build.token, t('token.alone')));
+  } else {
+    body.push(el('p', { class: 'note', text: t('build.tokenPlaceholder') }));
+  }
+
+  if (build.url) {
+    body.push(el('p', { class: 'note' }, [
+      document.createTextNode(build.reservation_created ? t('build.allocatedPre') : t('build.reusedPre')),
+      el('strong', { text: build.url }),
+      document.createTextNode(t('build.allocatedPost')),
+    ]));
+  } else {
+    body.push(el('p', { class: 'note', text: t('build.noAllocation') }));
+  }
+
+  return panel([el('span', { class: 'legend', text: t('build.runHead') })], body);
+}
+
+async function viewProvision(root) {
+  root.appendChild(head(t('build.title'), t('build.note')));
+
+  if (!canEdit()) {
+    root.appendChild(panel(null, [el('div', { class: 'blank' }, [
+      el('span', { class: 'legend', text: t('build.readOnly') }),
+      el('p', { class: 'note', text: t('build.readOnlyHint') }),
+    ])]));
+    return;
+  }
+  if (!hasAccount()) {
+    root.appendChild(panel(null, [needsAccountFirst('Credential')]));
+    return;
+  }
+
+  root.appendChild(panel(
+    [el('span', { class: 'legend', text: t('build.formHead') })],
+    [buildForm(), el('p', { class: 'note', text: t('build.formHint') })],
+  ));
+
+  if (state.build) root.appendChild(buildResult(state.build));
+}
+
 // ---- token reveal --------------------------------------------------------
 
 const tokenDialog = document.getElementById('token-dialog');
@@ -848,6 +1061,7 @@ tokenDialog.addEventListener('cancel', (e) => {
 
 const views = {
   field: viewField,
+  provision: viewProvision,
   reservations: viewReservations,
   clients: viewClients,
   accounts: viewAccounts,
@@ -982,6 +1196,8 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   const button = e.target.closest('button[data-view]');
   if (!button) return;
   state.view = button.dataset.view;
+  // A built command describes one errand; leaving the view ends it.
+  if (state.view !== 'provision') state.build = null;
   for (const b of document.querySelectorAll('#tabs button')) {
     b.classList.toggle('active', b === button);
     b.setAttribute('aria-current', b === button ? 'page' : 'false');

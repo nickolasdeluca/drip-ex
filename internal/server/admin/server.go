@@ -198,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/tunnels", s.authed(s.handleListTunnels))
 	mux.Handle("GET /api/sessions", s.authed(s.handleListSessions))
 	mux.Handle("POST /api/sessions/{id}/pin", s.adminOnly(s.handlePinSession))
+	mux.Handle("POST /api/provision", s.adminOnly(s.handleProvision))
 	mux.Handle("GET /api/audit", s.authed(s.handleListAudit))
 
 	// The embedded UI serves everything else.
