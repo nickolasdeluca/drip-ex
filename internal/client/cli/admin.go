@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"drip/internal/server/auth"
 	"drip/internal/server/store"
+	"drip/internal/shared/constants"
 	"drip/internal/shared/ui"
 	"drip/pkg/config"
 
@@ -62,6 +64,8 @@ func init() {
 	adminReservationCreateCmd.Flags().String("subdomain", "", "Subdomain to reserve, for http/https tunnels")
 	adminReservationCreateCmd.Flags().Int("tcp-port", 0, "TCP port to reserve, for tcp tunnels")
 	adminReservationCreateCmd.Flags().String("bandwidth", "", "Per-tunnel bandwidth limit, e.g. 1M (optional)")
+	adminReservationCreateCmd.Flags().Bool("force", false,
+		"Reserve a TCP port outside the range in the server config")
 	adminReservationListCmd.Flags().String("account", "", "Filter by account name")
 	adminReservationBindCmd.Flags().String("client", "", "Client credential ID to bind to; empty unbinds")
 }
@@ -88,6 +92,13 @@ var adminReservationCreateCmd = &cobra.Command{
 
 		if (subdomainFlag == "") == (tcpPort == 0) {
 			return fmt.Errorf("pass exactly one of --subdomain or --tcp-port")
+		}
+
+		if tcpPort != 0 {
+			force, _ := cmd.Flags().GetBool("force")
+			if err := checkTCPPortAgainstServer(tcpPort, force); err != nil {
+				return err
+			}
 		}
 
 		return withStore(func(ctx context.Context, s *store.Store) error {
@@ -288,6 +299,84 @@ func resolveDBPath() (string, error) {
 	}
 
 	return "", fmt.Errorf("no control plane database configured: pass --db, set DRIP_DB_PATH, or set db_path in the server config")
+}
+
+// tcpPortRangeForDB reports the range the server that owns this database
+// allocates TCP tunnel ports from, and the config file it was read from.
+//
+// The range lives in the server config and the reservation lives in SQLite, so
+// a port outside it is written happily and only fails when a client registers.
+// This command runs beside the server often enough to catch that, but it is not
+// the server: it never sees the flags the running process was started with, so
+// it only speaks up when the config it read is demonstrably about this same
+// database. A zero range means it could not tell, and nothing is checked.
+func tcpPortRangeForDB(dbPath string) (int, int, string) {
+	return tcpPortRangeFromConfig(config.DefaultServerConfigPath(), dbPath)
+}
+
+// tcpPortRangeFromConfig is tcpPortRangeForDB against a named config file.
+func tcpPortRangeFromConfig(configPath, dbPath string) (int, int, string) {
+	if !config.ServerConfigExists(configPath) {
+		return 0, 0, ""
+	}
+	cfg, err := config.LoadServerConfig(configPath)
+	if err != nil || cfg.DBPath == "" || !sameDatabase(cfg.DBPath, dbPath) {
+		return 0, 0, ""
+	}
+
+	// An omitted range is not an absent one: the server fills it with the same
+	// defaults, so checking against them is checking against what will run.
+	min, max := cfg.TCPPortMin, cfg.TCPPortMax
+	if min == 0 {
+		min = constants.DefaultTCPPortMin
+	}
+	if max == 0 {
+		max = constants.DefaultTCPPortMax
+	}
+	return min, max, configPath
+}
+
+// sameDatabase reports whether two paths name one file. It compares the files
+// themselves where both exist, so a relative path and an absolute one that
+// happen to be the same database are not read as two.
+func sameDatabase(a, b string) bool {
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(infoA, infoB)
+	}
+
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && filepath.Clean(absA) == filepath.Clean(absB)
+}
+
+// checkTCPPortAgainstServer refuses a port the server config says can never be
+// allocated. --force is the way past it, because the running server may have
+// been started with flags that override the file this read.
+func checkTCPPortAgainstServer(port int, force bool) error {
+	dbPath, err := resolveDBPath()
+	if err != nil {
+		return nil
+	}
+
+	min, max, configPath := tcpPortRangeForDB(dbPath)
+	if min == 0 || max == 0 || (port >= min && port <= max) {
+		return nil
+	}
+	if force {
+		fmt.Println(ui.Warning(fmt.Sprintf(
+			"tcp port %d is outside the range %d-%d in %s; reserving it anyway",
+			port, min, max, configPath)))
+		return nil
+	}
+
+	return fmt.Errorf(
+		"tcp port %d is outside the range %d-%d that %s allocates from; "+
+			"a client asking for it would be refused at registration. "+
+			"Reserve a port in range, widen tcp_port_min/tcp_port_max, "+
+			"or pass --force if the running server uses a different range",
+		port, min, max, configPath)
 }
 
 // withStore opens the control plane database for the duration of fn.
