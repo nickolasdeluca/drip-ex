@@ -240,6 +240,42 @@ stream**, and `POST .../pin` reports `rebound: true` when it was sent.
   is correct either way; `ErrNoControlStream` is expected often enough that it
   is not even logged.
 
+## The patch-in builder
+
+`POST /api/provision` (`admin/api_provision.go`) renders the command an operator
+pastes on a machine, in the shape of the panel's "Patch in" tab. Deployment
+stays two steps: the operator installs the binary however that fleet installs
+binaries, and this writes only the configuration half — `drip config set`,
+`drip config tunnel add`, and optionally the step that leaves it running. It
+renders no installer and must not grow into one.
+
+- **The command is rendered in Go, not in the panel.** Shell and PowerShell
+  quoting is what makes it safe, and it is worth a table test; the panel only
+  copies the string it was handed.
+- **An existing credential renders `PASTE_TOKEN_HERE`.** Only `sha256(secret)`
+  is stored, so the token of a credential issued earlier is unrecoverable — the
+  builder either issues a fresh one (`new_client`, which returns the token
+  exactly once, as `POST /api/clients` does) or leaves the placeholder. The
+  placeholder is deliberately free of shell metacharacters: `<TOKEN>` would be a
+  redirection in sh.
+- **Allocations are adopted, not fought over.** A name or port the account
+  already holds is reused and bound to the machine being patched in, so
+  rebuilding a command for a deployed machine is safe; one owned by another
+  account or already bound to another machine is refused.
+- **A TCP tunnel gets no `--subdomain`.** The reservation pins the port and the
+  client binds it by asking for nothing, which is resolution step 2.
+- **Windows autostart passes `--reseed`.** The step before it rewrote the user
+  config, and `service install` keeps an existing `%ProgramData%` copy, so
+  without it the service would read a stale file. It also emits
+  `drip service start`, because installing a service does not start it.
+- **The Windows script is one command per line.** `&&` needs PowerShell 7 and
+  these hosts are often on Windows PowerShell 5.1; the Unix script chains with
+  `&&` so a failure stops the sequence instead of half-configuring the machine.
+- **Reserving a TCP port does not check the server's port range.** The panel has
+  never done this — `Deployment` does not carry `tcp_port_min`/`max` — so a port
+  outside it is accepted here and refused at registration. Fix it in both paths
+  or neither.
+
 ## TLS
 
 `tls_mode` picks one of three paths, and `ResolveTLSMode` infers it when unset so
