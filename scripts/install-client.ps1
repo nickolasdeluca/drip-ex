@@ -323,7 +323,7 @@ function Initialize-Configuration {
 
     $server = ''
     while (-not $server) {
-        $server = (Read-Host 'Server address (e.g. tunnel.example.com:443)').Trim()
+        $server = (Read-Host 'Server address (e.g. tunnel.example.com:443, port defaults to 443)').Trim()
     }
 
     $token = ''

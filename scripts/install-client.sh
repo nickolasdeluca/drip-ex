@@ -61,12 +61,13 @@ msg_en() {
         path_note) echo "Please restart your terminal or run: source ~/.bashrc" ;;
         config_title) echo "Client Configuration" ;;
         configure_now) echo "Configure client now?" ;;
-        enter_server) echo "Enter server address (e.g., tunnel.example.com:8443)" ;;
+        enter_server) echo "Enter server address (e.g., tunnel.example.com:443, port defaults to 443)" ;;
         server_required) echo "Server address is required" ;;
         enter_token) echo "Enter authentication token" ;;
         token_required) echo "Token is required" ;;
         skip_verify) echo "Skip TLS certificate verification? (for self-signed certs)" ;;
         config_saved) echo "Configuration saved" ;;
+        config_failed) echo "Failed to save configuration" ;;
         install_complete) echo "Installation completed!" ;;
         usage_title) echo "Usage" ;;
         usage_http) echo "Expose HTTP service on port 3000" ;;
@@ -95,7 +96,7 @@ msg_en() {
         verify_install) echo "Verifying installation..." ;;
         verify_ok) echo "Verification passed" ;;
         verify_failed) echo "Verification failed" ;;
-        insecure_note) echo "Only use --insecure for development/testing" ;;
+        insecure_note) echo "Not stored in the config: pass -k on each drip command (development/testing only)" ;;
         uninstall_title) echo "Drip Client - Uninstall" ;;
         uninstall_prompt) echo "Uninstall Drip client now?" ;;
         uninstalling) echo "Uninstalling Drip client..." ;;
@@ -139,12 +140,13 @@ msg_zh() {
         path_note) echo "请重启终端或运行: source ~/.bashrc" ;;
         config_title) echo "客户端配置" ;;
         configure_now) echo "现在配置客户端？" ;;
-        enter_server) echo "输入服务器地址（例如：tunnel.example.com:8443）" ;;
+        enter_server) echo "输入服务器地址（例如：tunnel.example.com:443，端口默认 443）" ;;
         server_required) echo "服务器地址是必填项" ;;
         enter_token) echo "输入认证令牌" ;;
         token_required) echo "认证令牌是必填项" ;;
         skip_verify) echo "跳过 TLS 证书验证？（用于自签名证书）" ;;
         config_saved) echo "配置已保存" ;;
+        config_failed) echo "配置保存失败" ;;
         install_complete) echo "安装完成！" ;;
         usage_title) echo "使用方法" ;;
         usage_http) echo "暴露本地 3000 端口的 HTTP 服务" ;;
@@ -173,7 +175,7 @@ msg_zh() {
         verify_install) echo "验证安装..." ;;
         verify_ok) echo "验证通过" ;;
         verify_failed) echo "验证失败" ;;
-        insecure_note) echo "--insecure 仅用于开发/测试环境" ;;
+        insecure_note) echo "该选项不会写入配置：请在每条 drip 命令后加 -k（仅用于开发/测试）" ;;
         uninstall_title) echo "Drip 客户端 - 卸载" ;;
         uninstall_prompt) echo "现在卸载 Drip 客户端？" ;;
         uninstalling) echo "正在卸载 Drip 客户端..." ;;
@@ -781,16 +783,16 @@ configure_client() {
 
     # Insecure mode
     prompt_input "$(msg skip_verify) [y/N]: " insecure_choice
-    INSECURE=""
     if [[ "$insecure_choice" =~ ^[Yy]$ ]]; then
-        INSECURE="--insecure"
         print_warning "$(msg insecure_note)"
     fi
 
     # Save configuration
-    "$binary_path" config set --server "$SERVER" --token "$TOKEN" $INSECURE 2>/dev/null || true
-
-    print_success "$(msg config_saved)"
+    if "$binary_path" config set --server "$SERVER" --token "$TOKEN"; then
+        print_success "$(msg config_saved)"
+    else
+        print_error "$(msg config_failed)"
+    fi
 }
 
 # ============================================================================
