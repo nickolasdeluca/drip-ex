@@ -287,6 +287,37 @@ function danger(label, confirmText, run) {
   return button;
 }
 
+// An edit swaps the action group for its fields, the same way a destructive
+// action swaps it for a confirmation: the row being edited stays visible and no
+// modal covers the table. `build` is called on each open and returns the
+// controls plus the save it closes over.
+function editControl(build) {
+  const button = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.edit') });
+
+  button.addEventListener('click', () => {
+    const group = button.closest('.btn-row') || button;
+    const { nodes, save } = build();
+    const cancel = el('button', { type: 'button', class: 'btn-quiet small', text: t('common.cancel') });
+    const go = el('button', { type: 'button', class: 'btn small', text: t('common.save') });
+    const strip = el('span', { class: 'confirm editing' }, [...nodes, cancel, go]);
+
+    const restore = () => { strip.replaceWith(group); button.focus(); };
+    cancel.addEventListener('click', restore);
+    go.addEventListener('click', async () => {
+      for (const node of nodes) node.disabled = true;
+      go.disabled = true;
+      cancel.disabled = true;
+      go.textContent = t('common.working');
+      try { await save(); } catch (err) { status(err.message, true); restore(); }
+    });
+
+    group.replaceWith(strip);
+    nodes[0].focus();
+  });
+
+  return button;
+}
+
 // accountField returns the account control for a form, or null when there is
 // nothing to decide. With a single account the id rides along as a hidden
 // input, so a one-tenant deployment never sees the concept at all.
@@ -629,6 +660,25 @@ async function viewReservations(root) {
       ? stateCell('on', t('common.enabled'))
       : stateCell('held', t('common.disabled'))]) },
     { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
+      editControl(() => {
+        const machine = clientSelect('client_id');
+        machine.value = r.client_id || '';
+        const bandwidth = el('input', {
+          class: 'small', value: r.bandwidth || '', size: '5', placeholder: '1M',
+          autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('col.bandwidth'),
+        });
+        return {
+          nodes: [machine, bandwidth],
+          save: async () => {
+            await api('PATCH', `/api/reservations/${r.id}`, {
+              client_id: machine.value,
+              bandwidth: bandwidth.value.trim(),
+            });
+            status(t('alloc.saved'));
+            await render();
+          },
+        };
+      }),
       el('button', {
         type: 'button', class: 'btn-quiet small', text: r.enabled ? t('common.disable') : t('common.enable'),
         onclick: async (e) => {
@@ -706,6 +756,27 @@ async function viewClients(root) {
       ? stateCell('on', t('common.enabled'))
       : stateCell('held', t('common.disabled'))]) },
     { value: el('td', { class: 'right' }, [canEdit() ? el('span', { class: 'btn-row' }, [
+      editControl(() => {
+        const name = el('input', {
+          class: 'small', value: c.name, size: '12', required: true,
+          autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('client.name'),
+        });
+        const bandwidth = el('input', {
+          class: 'small', value: c.bandwidth || '', size: '5', placeholder: '1M',
+          autocapitalize: 'off', spellcheck: 'false', 'aria-label': t('col.bandwidth'),
+        });
+        return {
+          nodes: [name, bandwidth],
+          save: async () => {
+            await api('PATCH', `/api/clients/${c.id}`, {
+              name: name.value.trim(),
+              bandwidth: bandwidth.value.trim(),
+            });
+            status(t('client.saved'));
+            await render();
+          },
+        };
+      }),
       el('button', {
         type: 'button', class: 'btn-quiet small', text: c.enabled ? t('common.disable') : t('common.enable'),
         onclick: async (e) => {
