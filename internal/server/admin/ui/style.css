@@ -496,6 +496,11 @@ form.bench .btn { margin-bottom: 1px; }
 }
 .confirm span { font-size: 11.5px; color: var(--ink); }
 
+/* An inline edit reuses that strip without the alarm colour: nothing is being
+   destroyed, so the border is the ordinary rule. */
+.confirm.editing { border-color: var(--rule-strong); }
+.confirm.editing select { padding: 4px 9px; font-size: 11px; }
+
 /* ---- gate -------------------------------------------------------------- */
 
 .gate {
