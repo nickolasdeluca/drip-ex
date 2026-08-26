@@ -332,6 +332,14 @@ cross-platform.
   one blocks service registration until the config names a tunnel, since
   otherwise `-InstallService` fails on every clean install.
   `config tunnel list --names` is the scriptable form the installers read.
+- **The machine-wide config copy is kept, not refreshed.** `prepareServiceConfig`
+  returns an existing `%ProgramData%\drip\config.yaml` untouched, because an
+  administrator may have curated it — so a copy left behind by an earlier failed
+  install outlives the user config it was seeded from. `--reseed` overwrites it,
+  the installer passes that flag when the same run wrote the user config, and
+  errors about it name the file actually read. `selectTunnels` takes the config
+  path for exactly that reason: reporting the default path while reading the
+  machine copy sends the reader to the wrong file.
 - **`scripts/install-client.ps1` is the Windows installer**; the bash installers
   cannot register a service and only run under Git Bash or MSYS. It can install
   the service in the same pass (`-InstallService`), and it stops a running

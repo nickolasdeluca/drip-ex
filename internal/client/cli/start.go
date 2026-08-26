@@ -71,7 +71,8 @@ func runStart(_ *cobra.Command, args []string) error {
 	}
 
 	if len(cfg.Tunnels) == 0 {
-		return fmt.Errorf("no tunnels configured in %s", config.DefaultClientConfigPath())
+		return fmt.Errorf("no tunnels configured in %s\n\nAdd one with: drip config tunnel add --name web --type http --port 3000",
+			config.DefaultClientConfigPath())
 	}
 
 	if !startAll && len(args) == 0 {
@@ -88,7 +89,7 @@ func runStart(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
-	tunnelsToStart, err := selectTunnels(cfg, startAll, args)
+	tunnelsToStart, err := selectTunnels(cfg, startAll, args, config.DefaultClientConfigPath())
 	if err != nil {
 		return err
 	}

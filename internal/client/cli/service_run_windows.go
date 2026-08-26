@@ -107,7 +107,7 @@ func loadServiceTunnels(opts serviceRunOptions) (*config.ClientConfig, []*config
 		return nil, nil, err
 	}
 
-	tunnels, err := selectTunnels(cfg, opts.all, opts.tunnels)
+	tunnels, err := selectTunnels(cfg, opts.all, opts.tunnels, opts.configPath)
 	if err != nil {
 		return nil, nil, err
 	}

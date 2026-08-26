@@ -30,6 +30,9 @@ type serviceOptions struct {
 	startType   string
 	username    string
 	password    string
+	// reseed overwrites the machine-wide config copy from the user's own
+	// config. Without it an existing copy is kept, stale contents included.
+	reseed bool
 }
 
 // serviceRunOptions describes a service process launched by the service manager.
@@ -53,6 +56,7 @@ var (
 	serviceStartType   string
 	serviceUsername    string
 	servicePassword    string
+	serviceReseed      bool
 )
 
 var serviceCmd = &cobra.Command{
@@ -94,6 +98,7 @@ var serviceInstallCmd = &cobra.Command{
 			startType:   serviceStartType,
 			username:    serviceUsername,
 			password:    servicePassword,
+			reseed:      serviceReseed,
 		}
 
 		if err := validateServiceOptions(opts); err != nil {
@@ -192,6 +197,8 @@ func init() {
 	serviceInstallCmd.Flags().StringVar(&serviceStartType, "start-type", "delayed", "Start type: delayed, auto or manual")
 	serviceInstallCmd.Flags().StringVar(&serviceUsername, "username", "", `Account to run as (default LocalSystem, e.g. ".\\drip" or "DOMAIN\\user")`)
 	serviceInstallCmd.Flags().StringVar(&servicePassword, "password", "", "Password for --username")
+	serviceInstallCmd.Flags().BoolVar(&serviceReseed, "reseed", false,
+		"Refresh the machine-wide config copy from this user's configuration, discarding the existing copy")
 
 	serviceCmd.AddCommand(
 		serviceInstallCmd, serviceUninstallCmd, serviceStartCmd,
@@ -222,6 +229,12 @@ func validateServiceOptions(opts serviceOptions) error {
 
 	if opts.password != "" && opts.username == "" {
 		return fmt.Errorf("--password requires --username")
+	}
+
+	// --config names a file the administrator maintains; the machine-wide copy
+	// is the only one this command owns and may overwrite.
+	if opts.reseed && opts.configPath != "" {
+		return fmt.Errorf("--reseed refreshes the machine-wide config copy and cannot be combined with --config")
 	}
 
 	return nil
@@ -285,9 +298,17 @@ func normalizeWindowsPath(path string) string {
 }
 
 // selectTunnels resolves --all or a list of tunnel names against the config file.
-func selectTunnels(cfg *config.ClientConfig, all bool, names []string) ([]*config.TunnelConfig, error) {
+//
+// configPath names the file cfg was actually read from. The service reads a
+// machine-wide copy rather than the user's own config, so an error that assumed
+// the default path would send the reader to a file that is not the one in play.
+func selectTunnels(cfg *config.ClientConfig, all bool, names []string, configPath string) ([]*config.TunnelConfig, error) {
+	if configPath == "" {
+		configPath = config.DefaultClientConfigPath()
+	}
+
 	if len(cfg.Tunnels) == 0 {
-		return nil, fmt.Errorf("no tunnels configured in %s", config.DefaultClientConfigPath())
+		return nil, fmt.Errorf("no tunnels configured in %s\n\nAdd one with: drip config tunnel add --name web --type http --port 3000", configPath)
 	}
 
 	if all {

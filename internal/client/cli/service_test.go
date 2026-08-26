@@ -110,7 +110,7 @@ func TestSelectTunnels(t *testing.T) {
 	t.Run("all returns every tunnel", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := selectTunnels(cfg, true, nil)
+		got, err := selectTunnels(cfg, true, nil, "")
 		if err != nil {
 			t.Fatalf("selectTunnels() unexpected error: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestSelectTunnels(t *testing.T) {
 	t.Run("names are resolved in order", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := selectTunnels(cfg, false, []string{"api", "web"})
+		got, err := selectTunnels(cfg, false, []string{"api", "web"}, "")
 		if err != nil {
 			t.Fatalf("selectTunnels() unexpected error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestSelectTunnels(t *testing.T) {
 	t.Run("unknown name lists the available ones", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := selectTunnels(cfg, false, []string{"db"})
+		_, err := selectTunnels(cfg, false, []string{"db"}, "")
 		if err == nil {
 			t.Fatal("selectTunnels() expected error for an unknown tunnel")
 		}
@@ -143,14 +143,58 @@ func TestSelectTunnels(t *testing.T) {
 		}
 	})
 
-	t.Run("empty config is rejected", func(t *testing.T) {
+	// The service reads a machine-wide copy, not the user's own config, so the
+	// error has to name the file it actually read.
+	t.Run("empty config is rejected and names the file it read", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := selectTunnels(&config.ClientConfig{}, true, nil)
+		const machineCopy = `C:\ProgramData\drip\config.yaml`
+
+		_, err := selectTunnels(&config.ClientConfig{}, true, nil, machineCopy)
 		if err == nil {
 			t.Fatal("selectTunnels() expected error for a config without tunnels")
 		}
+		if !strings.Contains(err.Error(), machineCopy) {
+			t.Fatalf("selectTunnels() error = %q, want it to name %s", err, machineCopy)
+		}
 	})
+
+	t.Run("empty path falls back to the default config", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := selectTunnels(&config.ClientConfig{}, true, nil, "")
+		if err == nil {
+			t.Fatal("selectTunnels() expected error for a config without tunnels")
+		}
+		if !strings.Contains(err.Error(), config.DefaultClientConfigPath()) {
+			t.Fatalf("selectTunnels() error = %q, want it to name the default config path", err)
+		}
+	})
+}
+
+func TestValidateServiceOptionsRejectsReseedWithConfig(t *testing.T) {
+	t.Parallel()
+
+	opts := serviceOptions{
+		name:       "drip",
+		all:        true,
+		startType:  "delayed",
+		reseed:     true,
+		configPath: `C:\Users\lm\.drip\config.yaml`,
+	}
+
+	err := validateServiceOptions(opts)
+	if err == nil {
+		t.Fatal("validateServiceOptions() accepted --reseed with --config, want an error")
+	}
+	if !strings.Contains(err.Error(), "--reseed") {
+		t.Fatalf("validateServiceOptions() error = %q, want it to name --reseed", err)
+	}
+
+	opts.configPath = ""
+	if err := validateServiceOptions(opts); err != nil {
+		t.Fatalf("validateServiceOptions() with --reseed alone error = %v", err)
+	}
 }
 
 func TestIsUnderDir(t *testing.T) {

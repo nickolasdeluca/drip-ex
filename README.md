@@ -272,6 +272,12 @@ drip service status
 `install-client.ps1 -InstallService -AllTunnels` does all of that during
 installation, and `install-client.ps1 -Uninstall` reverses it.
 
+The service cannot read a config inside a user profile, so `install` copies it
+to `%ProgramData%\drip\config.yaml` and runs from there. An existing copy is
+kept — an administrator may have edited it — which means a copy left by an
+earlier install can be older than the configuration you just changed. Refresh it
+with `drip service install --reseed`.
+
 | Command | |
 |---|---|
 | `drip service install` | Register the service. `--all` or `--tunnel <name>` (repeatable); `--start-type delayed\|auto\|manual`; `--username` / `--password` to run as a specific account; `--config`, `--log`, `--name` to override paths and the service name |

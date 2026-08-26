@@ -37,11 +37,16 @@ func installService(opts serviceOptions) error {
 		return err
 	}
 
-	configPath, seededFrom, err := prepareServiceConfig(opts.configPath)
+	// The machine-wide copy is the one this command owns; a path the operator
+	// passed with --config is theirs, and is never rewritten or second-guessed.
+	ownsCopy := opts.configPath == ""
+
+	configPath, seededFrom, err := prepareServiceConfig(opts.configPath, opts.reseed)
 	if err != nil {
 		return err
 	}
 	opts.configPath = configPath
+	reusedCopy := ownsCopy && seededFrom == ""
 
 	// Resolve the tunnels now: an install whose config the service cannot use
 	// would otherwise fail at boot, unattended, with nobody reading the log.
@@ -49,7 +54,14 @@ func installService(opts serviceOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := selectTunnels(cfg, opts.all, opts.tunnels); err != nil {
+	if _, err := selectTunnels(cfg, opts.all, opts.tunnels, configPath); err != nil {
+		// An earlier install left this copy behind, so it can be older than the
+		// configuration the operator just edited.
+		if reusedCopy {
+			return fmt.Errorf("%w\n\nThis is the machine-wide copy kept from an earlier install. "+
+				"Refresh it from %s with: drip service install --reseed",
+				err, config.DefaultClientConfigPath())
+		}
 		return err
 	}
 
@@ -120,6 +132,8 @@ func installService(opts serviceOptions) error {
 	}
 	if seededFrom != "" {
 		lines = append(lines, ui.KeyValue("Copied from", seededFrom))
+	} else if reusedCopy {
+		lines = append(lines, ui.KeyValue("Kept", "existing copy; --reseed refreshes it"))
 	}
 	lines = append(lines, "", "Next: drip service start --name "+opts.name)
 
@@ -358,7 +372,7 @@ func configureServiceRecovery(service *mgr.Service) error {
 // prepareServiceConfig resolves the config path the service will read, seeding it
 // from the user's own config the first time. Returns the resolved path and the
 // path it was copied from, if any.
-func prepareServiceConfig(requested string) (string, string, error) {
+func prepareServiceConfig(requested string, reseed bool) (string, string, error) {
 	path := requested
 	if path == "" {
 		path = defaultServiceConfigPath()
@@ -370,7 +384,9 @@ func prepareServiceConfig(requested string) (string, string, error) {
 	}
 
 	if _, err := os.Stat(path); err == nil {
-		return path, "", nil
+		if !reseed {
+			return path, "", nil
+		}
 	} else if !os.IsNotExist(err) {
 		return "", "", fmt.Errorf("failed to read %s: %w", path, err)
 	}

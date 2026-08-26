@@ -312,6 +312,11 @@ function Invoke-Drip {
     }
 }
 
+# ConfigurationWritten records that this run wrote the client configuration, so
+# a machine-wide copy from an earlier install can be refreshed rather than
+# silently reused.
+$script:ConfigurationWritten = $false
+
 function Initialize-Configuration {
     param([string]$BinaryPath)
 
@@ -333,6 +338,7 @@ function Initialize-Configuration {
 
     Invoke-Drip -BinaryPath $BinaryPath -Arguments @('config', 'set', '--server', $server, '--token', $token)
     Write-Ok 'Configuration saved'
+    $script:ConfigurationWritten = $true
 
     Add-TunnelDefinition -BinaryPath $BinaryPath
 }
@@ -373,6 +379,7 @@ function Add-TunnelDefinition {
     if ($subdomain) { $arguments += @('--subdomain', $subdomain) }
 
     Invoke-Drip -BinaryPath $BinaryPath -Arguments $arguments
+    $script:ConfigurationWritten = $true
 }
 
 # Test-TunnelConfigured reports whether the config file names any tunnel.
@@ -411,6 +418,12 @@ function Register-DripService {
         foreach ($name in $Tunnel) { $arguments += @('--tunnel', $name) }
     } else {
         $arguments += '--all'
+    }
+
+    # This run wrote the configuration the operator just answered for, so an
+    # older machine-wide copy left by a previous install is stale by definition.
+    if ($script:ConfigurationWritten) {
+        $arguments += '--reseed'
     }
 
     Write-Step 'Installing the Drip service'
