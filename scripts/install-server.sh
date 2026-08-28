@@ -1194,6 +1194,12 @@ RestartSec=5s
 LimitNOFILE=65536
 LimitNPROC=4096
 
+# The service runs as an unprivileged user, so binding a port below 1024 -- 443
+# is a common choice here -- needs CAP_NET_BIND_SERVICE. Granting it and
+# bounding the set to it alone is narrower than running the server as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 # Working directory
 WorkingDirectory=${WORK_DIR}
 
