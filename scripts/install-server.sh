@@ -1153,8 +1153,18 @@ create_service_user() {
     if id "$SERVICE_USER" &>/dev/null; then
         print_warning "$(msg user_exists): $SERVICE_USER"
     else
-        useradd -r -s /bin/false "$SERVICE_USER"
+        # -U creates the matching group. Without it a host whose
+        # /etc/login.defs sets USERGROUPS_ENAB no leaves the group missing, and
+        # every later "chown root:$SERVICE_USER" dies with "invalid group".
+        useradd -r -U -s /bin/false "$SERVICE_USER"
         print_success "$(msg user_created): $SERVICE_USER"
+    fi
+
+    # The account may predate this installer, or have been created without its
+    # own group. Either way the certificate chowns below need the group to exist.
+    if ! getent group "$SERVICE_USER" >/dev/null; then
+        groupadd -r "$SERVICE_USER"
+        usermod -g "$SERVICE_USER" "$SERVICE_USER"
     fi
 }
 
@@ -1454,9 +1464,11 @@ main() {
     configure_server
 
     echo ""
-    setup_certificate
     create_service_user
     create_directories
+
+    echo ""
+    setup_certificate
     create_systemd_service
     configure_firewall
     save_config
